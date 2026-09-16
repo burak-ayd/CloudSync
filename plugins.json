@@ -2,15 +2,15 @@
 	{
 		"url": "https://raw.githubusercontent.com/burak-ayd/CloudSync/master/CloudSync.cs3",
 		"status": 1,
-		"version": 2,
+		"version": 3,
 		"name": "CloudSync",
 		"internalName": "CloudSync",
 		"authors": ["burak-ayd"],
 		"description": "Complete sync solution: bookmarks, watch history, search history, extensions & settings. Modern UI with progress indicators. Full import/export!",
 		"fileSize": 54559,
-		"fileHash": "sha256-1b422166a4725166749006df798f57d409af58db1d66e6a38879b562ddb1a643",
+		"fileHash": "sha256-32bc1065c4d9102df73ae3f51e35f10915c9a17938bcdaa6164be6a76d932391",
 		"repositoryUrl": "https://github.com/burak-ayd/CloudSync",
-		"language": "universal",
+		"language": "tr",
 		"tvTypes": ["Others"],
 		"iconUrl": "https://raw.githubusercontent.com/recloudstream/cloudstream/master/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png",
 		"apiVersion": 1
