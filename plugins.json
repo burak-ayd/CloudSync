@@ -8,9 +8,12 @@
 		"authors": ["burak-ayd"],
 		"description": "Complete sync solution: bookmarks, watch history, search history, extensions & settings. Modern UI with progress indicators. Full import/export!",
 		"fileSize": 53907,
+		"fileHash": "sha256-b7bcf7dba85eed47374cba0c1e7bbcd78c3ae5bebbf18bb1f4194ed0f3de40ca",
 		"repositoryUrl": "https://github.com/burak-ayd/CloudSync",
-		"language": "tr",
-		"tvTypes": [],
+		"language": "universal",
+		"tvTypes": [
+			"Others"
+		],
 		"iconUrl": "https://raw.githubusercontent.com/recloudstream/cloudstream/master/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png",
 		"apiVersion": 1
 	}
