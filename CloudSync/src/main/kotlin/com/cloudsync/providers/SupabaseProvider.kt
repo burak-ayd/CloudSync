@@ -9,6 +9,8 @@ import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.PropertyNamingStrategies
+import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -37,6 +39,8 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
     override val providerName = "Supabase"
 
     private val objectMapper = ObjectMapper().apply {
+        registerKotlinModule()
+        propertyNamingStrategy = PropertyNamingStrategies.SNAKE_CASE
         configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
         setSerializationInclusion(JsonInclude.Include.NON_NULL)
     }

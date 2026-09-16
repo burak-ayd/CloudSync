@@ -7,13 +7,13 @@ import com.fasterxml.jackson.annotation.JsonProperty
  * SharedPreferences'dan çıkarılan her key-value çifti bu modelle temsil edilir.
  */
 data class SyncDataItem(
-    @JsonProperty("id") val id: String? = null,
-    @JsonProperty("user_id") val userId: String,
-    @JsonProperty("device_id") val deviceId: String,
-    @JsonProperty("data_type") val dataType: String,
-    @JsonProperty("data_key") val dataKey: String,
-    @JsonProperty("data_value") val dataValue: String?,
-    @JsonProperty("updated_at") val updatedAt: String? = null
+    @get:JsonProperty("id") @param:JsonProperty("id") val id: String? = null,
+    @get:JsonProperty("user_id") @param:JsonProperty("user_id") val userId: String,
+    @get:JsonProperty("device_id") @param:JsonProperty("device_id") val deviceId: String,
+    @get:JsonProperty("data_type") @param:JsonProperty("data_type") val dataType: String,
+    @get:JsonProperty("data_key") @param:JsonProperty("data_key") val dataKey: String,
+    @get:JsonProperty("data_value") @param:JsonProperty("data_value") val dataValue: String?,
+    @get:JsonProperty("updated_at") @param:JsonProperty("updated_at") val updatedAt: String? = null
 )
 
 /**
@@ -21,23 +21,23 @@ data class SyncDataItem(
  * Bir cihazdan yükleme/indirme işlemi bu model üzerinden yapılır.
  */
 data class SyncPackage(
-    @JsonProperty("device_id") val deviceId: String,
-    @JsonProperty("user_id") val userId: String,
-    @JsonProperty("timestamp") val timestamp: Long = System.currentTimeMillis(),
-    @JsonProperty("items") val items: List<SyncDataItem> = emptyList()
+    @get:JsonProperty("device_id") @param:JsonProperty("device_id") val deviceId: String,
+    @get:JsonProperty("user_id") @param:JsonProperty("user_id") val userId: String,
+    @get:JsonProperty("timestamp") @param:JsonProperty("timestamp") val timestamp: Long = System.currentTimeMillis(),
+    @get:JsonProperty("items") @param:JsonProperty("items") val items: List<SyncDataItem> = emptyList()
 )
 
 /**
  * Senkronizasyon log kaydı.
  */
 data class SyncLogEntry(
-    @JsonProperty("id") val id: String? = null,
-    @JsonProperty("user_id") val userId: String,
-    @JsonProperty("device_id") val deviceId: String,
-    @JsonProperty("action") val action: String,
-    @JsonProperty("data_type") val dataType: String? = null,
-    @JsonProperty("items_count") val itemsCount: Int = 0,
-    @JsonProperty("synced_at") val syncedAt: String? = null
+    @get:JsonProperty("id") @param:JsonProperty("id") val id: String? = null,
+    @get:JsonProperty("user_id") @param:JsonProperty("user_id") val userId: String,
+    @get:JsonProperty("device_id") @param:JsonProperty("device_id") val deviceId: String,
+    @get:JsonProperty("action") @param:JsonProperty("action") val action: String,
+    @get:JsonProperty("data_type") @param:JsonProperty("data_type") val dataType: String? = null,
+    @get:JsonProperty("items_count") @param:JsonProperty("items_count") val itemsCount: Int = 0,
+    @get:JsonProperty("synced_at") @param:JsonProperty("synced_at") val syncedAt: String? = null
 )
 
 /**
