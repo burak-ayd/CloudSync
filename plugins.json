@@ -8,7 +8,7 @@
 		"authors": ["burak-ayd"],
 		"description": "Complete sync solution: bookmarks, watch history, search history, extensions & settings. Modern UI with progress indicators. Full import/export!",
 		"fileSize": 54559,
-		"fileHash": "sha256-d96bd827a7745f3928f4308d6a70390167f4fad4acd0239143823fe4103161eb",
+		"fileHash": "sha256-1b422166a4725166749006df798f57d409af58db1d66e6a38879b562ddb1a643",
 		"repositoryUrl": "https://github.com/burak-ayd/CloudSync",
 		"language": "universal",
 		"tvTypes": ["Others"],
