@@ -1,0 +1,17 @@
+[
+	{
+		"url": "https://raw.githubusercontent.com/burak-ayd/CloudSync/master/CloudSync/build/CloudSync.cs3",
+		"status": 1,
+		"version": 1,
+		"name": "CloudSync",
+		"internalName": "CloudSync",
+		"authors": ["burak-ayd"],
+		"description": "Multi-cloud sync for bookmarks & watch history. Full import/export working! Supports Supabase (GDrive & Firebase coming soon).",
+		"fileSize": 22673,
+		"repositoryUrl": "https://github.com/burak-ayd/CloudSync",
+		"language": "tr",
+		"tvTypes": [],
+		"iconUrl": "https://raw.githubusercontent.com/recloudstream/cloudstream/master/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png",
+		"apiVersion": 1
+	}
+]
