@@ -55,6 +55,11 @@ class DataExtractor(private val context: Context) {
         "PLUGINS_KEY_LOCAL"
     )
 
+    private fun isNonTransferable(key: String): Boolean {
+        val lower = key.lowercase()
+        return nonTransferableKeys.any { lower.contains(it.lowercase()) }
+    }
+
     /**
      * Belirtilen veri tiplerine ait tüm SharedPreferences verilerini çıkarır.
      */
@@ -67,8 +72,8 @@ class DataExtractor(private val context: Context) {
         val defaultPrefs = PreferenceManager.getDefaultSharedPreferences(context)
         val rebuildPrefs = context.getSharedPreferences(REBUILD_PREFS_NAME, Context.MODE_PRIVATE)
 
-        extractFromPrefs(defaultPrefs, dataTypes, userId, deviceId, items)
-        extractFromPrefs(rebuildPrefs, dataTypes, userId, deviceId, items)
+        extractFromPrefs(defaultPrefs, dataTypes, userId, deviceId, items, isRebuildPrefs = false)
+        extractFromPrefs(rebuildPrefs, dataTypes, userId, deviceId, items, isRebuildPrefs = true)
 
         Log.i(TAG, "Toplam ${items.size} veri çıkarıldı. Tipler: ${dataTypes.map { it.name }}")
         return items
@@ -82,23 +87,24 @@ class DataExtractor(private val context: Context) {
         dataTypes: List<SyncDataType>,
         userId: String,
         deviceId: String,
-        items: MutableList<SyncDataItem>
+        items: MutableList<SyncDataItem>,
+        isRebuildPrefs: Boolean
     ) {
         val allEntries = prefs.all ?: return
 
         for ((key, value) in allEntries) {
             // CloudSync'in kendi key'lerini ve hassas verileri atla
             if (SyncConfig.isCloudSyncKey(key)) continue
-            if (nonTransferableKeys.contains(key)) continue
+            if (isNonTransferable(key)) continue
 
             // Bu key hangi veri tipine ait?
-            val dataType = SyncDataType.fromKey(key) ?: continue
+            val dataType = SyncDataType.fromKey(key, isRebuildPrefs) ?: continue
 
             // Kullanıcı bu veri tipini senkronize etmek istiyor mu?
             if (!dataTypes.contains(dataType)) continue
 
             // Değeri JSON string'e çevir
-            val serializedValue = serializeValue(value)
+            val serializedValue = serializeValue(value) ?: continue
 
             items.add(
                 SyncDataItem(
@@ -123,32 +129,51 @@ class DataExtractor(private val context: Context) {
         val defaultEditor = defaultPrefs.edit()
         val rebuildEditor = rebuildPrefs.edit()
 
+        // Hedef cihazın mevcut aktif profilini öğren
+        val currentAccount = try {
+            com.lagradost.cloudstream3.utils.DataStoreHelper.currentAccount
+        } catch (_: Exception) {
+            "0"
+        }
+
         var appliedCount = 0
 
         for (item in items) {
             // Güvenlik kontrolü
-            if (nonTransferableKeys.contains(item.dataKey)) continue
+            if (isNonTransferable(item.dataKey)) continue
             if (SyncConfig.isCloudSyncKey(item.dataKey)) continue
 
             val value = item.dataValue ?: continue
 
             // Hangi SharedPreferences'a yazılacağını belirle
-            // Settings tipindeki veriler default prefs'e, diğerleri rebuild'e
-            val editor = if (item.dataType == SyncDataType.SETTINGS.name) {
-                defaultEditor
-            } else {
-                rebuildEditor
-            }
+            // Hesap öneki veya rebuild_preference verileri rebuildEditor'e, saf ayarlar defaultEditor'e
+            val isRebuildItem = item.dataType != SyncDataType.SETTINGS.name ||
+                    item.dataKey.contains("/") ||
+                    Regex("^[0-9]+/").containsMatchIn(item.dataKey)
 
-            // Değeri geri yazarken tipini korumaya çalış
+            val editor = if (isRebuildItem) rebuildEditor else defaultEditor
+
+            // Değeri geri yazarken tipini koru
             deserializeAndApply(editor, item.dataKey, value)
             appliedCount++
+
+            // EĞER anahtar bir hesap öneki içeriyorsa (örn. "0/result_favorites_state_data/123"):
+            // Ve bu cihazdaki aktif hesap kaynak hesaptan farklıysa,
+            // aktif hesap için de kopyala ki kullanıcı profili hangisi olursa olsun içerik görünsün.
+            val accountMatch = Regex("^([0-9]+)/(.*)").find(item.dataKey)
+            if (accountMatch != null) {
+                val sourceAccount = accountMatch.groupValues[1]
+                val relativePath = accountMatch.groupValues[2]
+                if (sourceAccount != currentAccount) {
+                    deserializeAndApply(rebuildEditor, "$currentAccount/$relativePath", value)
+                }
+            }
         }
 
         defaultEditor.apply()
         rebuildEditor.apply()
 
-        Log.i(TAG, "$appliedCount veri uygulandı")
+        Log.i(TAG, "$appliedCount veri uygulandı (Hedef aktif hesap: $currentAccount)")
     }
 
     /**
@@ -227,10 +252,14 @@ class DataExtractor(private val context: Context) {
 
         var count = 0
         defaultPrefs.all?.forEach { (key, _) ->
-            if (SyncDataType.fromKey(key) == dataType) count++
+            if (!isNonTransferable(key) && !SyncConfig.isCloudSyncKey(key)) {
+                if (SyncDataType.fromKey(key, isRebuildPrefs = false) == dataType) count++
+            }
         }
         rebuildPrefs.all?.forEach { (key, _) ->
-            if (SyncDataType.fromKey(key) == dataType) count++
+            if (!isNonTransferable(key) && !SyncConfig.isCloudSyncKey(key)) {
+                if (SyncDataType.fromKey(key, isRebuildPrefs = true) == dataType) count++
+            }
         }
         return count
     }

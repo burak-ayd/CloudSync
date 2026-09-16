@@ -570,11 +570,29 @@ class CloudSyncPlugin : Plugin() {
                 progressDialog.dismiss()
 
                 if (result?.success == true) {
-                    Toast.makeText(
-                        activity,
-                        "✅ ${result.message}",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    val hasDownloaded = result.downloadedCount > 0
+                    if (hasDownloaded) {
+                        AlertDialog.Builder(activity)
+                            .setTitle("✅ Senkronizasyon Tamamlandı")
+                            .setMessage("${result.message}\n\nİndirilen favorilerin, listelerin ve izleme geçmişinin CloudStream ana ekranında ve kütüphanede görünmesi için uygulamanın yeniden başlatılması gerekmektedir.")
+                            .setPositiveButton("Yeniden Başlat") { _, _ ->
+                                try {
+                                    val intent = activity.intent
+                                    activity.finish()
+                                    activity.startActivity(intent)
+                                } catch (e: Exception) {
+                                    activity.recreate()
+                                }
+                            }
+                            .setNegativeButton("Daha Sonra", null)
+                            .show()
+                    } else {
+                        Toast.makeText(
+                            activity,
+                            "✅ ${result.message}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                     showSyncDialog(activity)
                 } else {
                     AlertDialog.Builder(activity)

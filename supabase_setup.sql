@@ -57,12 +57,12 @@ CREATE TRIGGER update_sync_data_updated_at
 -- Aksi takdirde anon key'e sahip herkes verilere erişebilir.
 -- Kişisel kullanım için bu bir sorun değildir.
 
--- ALTER TABLE sync_data ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE sync_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sync_data ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sync_log ENABLE ROW LEVEL SECURITY;
 
 -- Anon key ile erişime izin ver (kişisel kullanım için)
--- CREATE POLICY "Allow all access" ON sync_data FOR ALL USING (true);
--- CREATE POLICY "Allow all access" ON sync_log FOR ALL USING (true);
+CREATE POLICY "Allow all access" ON sync_data FOR ALL USING (true);
+CREATE POLICY "Allow all access" ON sync_log FOR ALL USING (true);
 
 -- =============================================================
 -- Kurulum tamamlandı! ✅

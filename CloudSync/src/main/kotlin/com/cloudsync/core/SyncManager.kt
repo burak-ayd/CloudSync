@@ -110,7 +110,8 @@ class SyncManager(private val context: Context) {
                 callback?.onSyncProgress("Çakışmalar çözümleniyor...")
 
                 // 3. Çakışmaları çöz
-                val resolved = conflictResolver.resolve(localItems, remoteItems)
+                val lastSyncTime = SyncConfig.getLastSyncTime(context)
+                val resolved = conflictResolver.resolve(localItems, remoteItems, lastSyncTime)
 
                 // 4. Yeni verileri buluta yükle
                 var uploadedCount = 0

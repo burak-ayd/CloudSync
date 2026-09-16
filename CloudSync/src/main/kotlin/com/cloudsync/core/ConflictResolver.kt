@@ -25,7 +25,8 @@ class ConflictResolver {
      */
     fun resolve(
         localItems: List<SyncDataItem>,
-        remoteItems: List<SyncDataItem>
+        remoteItems: List<SyncDataItem>,
+        lastSyncTime: Long = 0L
     ): ResolveResult {
         val localMap = localItems.associateBy { "${it.dataType}:${it.dataKey}" }
         val remoteMap = remoteItems.associateBy { "${it.dataType}:${it.dataKey}" }
@@ -40,20 +41,27 @@ class ConflictResolver {
             if (remoteItem == null) {
                 toUpload.add(localItem)
             } else {
-                // İkisinde de var → timestamp karşılaştır
-                val localTime = parseTimestamp(localItem.updatedAt)
+                // Değerler tamamen aynıysa işlem yapmaya gerek yok
+                if (localItem.dataValue == remoteItem.dataValue) {
+                    continue
+                }
+
+                // Değerler farklı:
                 val remoteTime = parseTimestamp(remoteItem.updatedAt)
 
-                if (localTime > remoteTime) {
-                    // Local daha yeni → yükle
-                    toUpload.add(localItem)
-                    conflictCount++
-                } else if (remoteTime > localTime) {
-                    // Remote daha yeni → indir
+                if (lastSyncTime == 0L) {
+                    // Cihaz ilk defa senkronize oluyorsa bulut verisini tercih et
                     toDownload.add(remoteItem)
                     conflictCount++
+                } else if (remoteTime > lastSyncTime && remoteItem.deviceId != localItem.deviceId) {
+                    // Başka bir cihaz son senkronizasyonumuzdan SONRA güncellemiş → indir
+                    toDownload.add(remoteItem)
+                    conflictCount++
+                } else {
+                    // Bu cihazda yerel olarak değişti veya güncellendi → yükle
+                    toUpload.add(localItem)
+                    conflictCount++
                 }
-                // Eşitse → değişiklik yok, ikisi de aynı
             }
         }
 

@@ -58,20 +58,43 @@ data class SupabaseError(
  */
 enum class SyncDataType(val displayName: String, val keyPatterns: List<String>) {
     BOOKMARKS(
-        "Favoriler",
-        listOf("bookmark_", "favorites_", "result_", "result_season")
+        "Favoriler & Listeler",
+        listOf(
+            "result_favorites_state_data",
+            "result_watch_state_data",
+            "result_subscribed_state_data",
+            "bookmark_",
+            "favorites_"
+        )
     ),
     WATCH_PROGRESS(
         "Kaldığın Yerden Devam",
-        listOf("video_pos_", "resume_", "episode_")
+        listOf(
+            "video_pos_dur",
+            "result_resume_watching",
+            "video_watch_state",
+            "result_watch_state",
+            "result_season",
+            "result_episode",
+            "result_dub",
+            "video_pos_",
+            "resume_",
+            "episode_"
+        )
     ),
     SEARCH_HISTORY(
         "Arama Geçmişi",
-        listOf("search_history")
+        listOf(
+            "search_history"
+        )
     ),
     REPOS(
         "Eklentiler & Depolar",
-        listOf("REPOS_KEY", "repository_")
+        listOf(
+            "repos_key",
+            "user_custom_sites",
+            "repository_"
+        )
     ),
     SETTINGS(
         "Uygulama Ayarları",
@@ -80,18 +103,56 @@ enum class SyncDataType(val displayName: String, val keyPatterns: List<String>) 
             "theme_key", "quality_pref", "resize_pref", "dns_pref",
             "subtitle_", "playback_speed", "player_", "provider_",
             "lang_pref", "auto_", "show_fillers", "prerelease_updates",
-            "poster_ui_key", "ui_settings"
+            "poster_ui_key", "ui_settings", "home_api_used",
+            "result_resume_watching_migrated"
         )
     );
 
     companion object {
+        private val ACCOUNT_PREFIX_REGEX = Regex("^[0-9]+/")
+
         /**
          * Verilen SharedPreferences key'inin hangi sync tipine ait olduğunu bulur.
+         * CloudStream verileri "0/result_favorites_state_data/123" gibi hesap önekleriyle saklar.
+         *
+         * @param key SharedPreferences anahtarı
+         * @param isRebuildPrefs Anahtarın rebuild_preference dosyasından gelip gelmediği
          */
-        fun fromKey(key: String): SyncDataType? {
-            return entries.firstOrNull { type ->
-                type.keyPatterns.any { pattern -> key.startsWith(pattern) }
+        fun fromKey(key: String, isRebuildPrefs: Boolean = false): SyncDataType? {
+            val cleanKey = key.replaceFirst(ACCOUNT_PREFIX_REGEX, "")
+            val cleanLower = cleanKey.lowercase()
+
+            // 1. Favoriler, Listeler (Planlananlar, İzlenenler vb.)
+            if (BOOKMARKS.keyPatterns.any { cleanLower.startsWith(it) }) {
+                return BOOKMARKS
             }
+
+            // 2. Kaldığın Yerden Devam & İzleme Geçmişi
+            if (WATCH_PROGRESS.keyPatterns.any { cleanLower.startsWith(it) }) {
+                return WATCH_PROGRESS
+            }
+
+            // 3. Arama Geçmişi
+            if (SEARCH_HISTORY.keyPatterns.any { cleanLower.startsWith(it) }) {
+                return SEARCH_HISTORY
+            }
+
+            // 4. Depolar
+            if (REPOS.keyPatterns.any { cleanLower.startsWith(it) }) {
+                return REPOS
+            }
+
+            // 5. Ayarlar
+            if (SETTINGS.keyPatterns.any { cleanLower.startsWith(it) }) {
+                return SETTINGS
+            }
+
+            // 6. Default SharedPreferences'da bulunan ve yukarıdakilere girmeyen ayarlar
+            if (!isRebuildPrefs && !cleanKey.contains("/")) {
+                return SETTINGS
+            }
+
+            return null
         }
     }
 }
