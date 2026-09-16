@@ -75,13 +75,17 @@ class CloudSyncPlugin : Plugin() {
                 try {
                     Log.i(TAG, "Açılışta otomatik senkronizasyon başlatılıyor...")
                     val result = syncManager?.syncAll()
-                    if (result?.success == true && result.downloadedCount > 0) {
-                        Log.i(TAG, "Açılışta ${result.downloadedCount} yeni veri indirildi, UI yenileniyor...")
-                        notifyUIUpdate()
+                    if (result?.success == true && (result.downloadedCount > 0 || result.uploadedCount > 0)) {
+                        val types = result.updatedTypes.map { it.displayName }.distinct()
+                        val typeText = if (types.isNotEmpty()) types.joinToString(", ") else "Veriler"
+                        Log.i(TAG, "Açılış sync: $typeText güncellendi (↓${result.downloadedCount} ↑${result.uploadedCount})")
+                        if (result.downloadedCount > 0) {
+                            notifyUIUpdate()
+                        }
                         withContext(Dispatchers.Main) {
                             Toast.makeText(
                                 context,
-                                "☁️ CloudSync: ${result.downloadedCount} veri güncellendi",
+                                "☁️ CloudSync: $typeText güncellendi",
                                 Toast.LENGTH_SHORT
                             ).show()
                         }

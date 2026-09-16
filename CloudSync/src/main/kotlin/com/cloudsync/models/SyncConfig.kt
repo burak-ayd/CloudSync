@@ -173,4 +173,15 @@ object SyncConfig {
     fun isCloudSyncKey(key: String): Boolean {
         return key.startsWith("cloudsync_")
     }
+
+    // ==================== Silme Takibi (Known Keys) ====================
+    private const val KEY_KNOWN_SYNC_KEYS = "cloudsync_known_keys"
+
+    fun getKnownKeys(context: Context): Set<String> {
+        return getPrefs(context).getStringSet(KEY_KNOWN_SYNC_KEYS, emptySet()) ?: emptySet()
+    }
+
+    fun saveKnownKeys(context: Context, keys: Set<String>) {
+        getPrefs(context).edit().putStringSet(KEY_KNOWN_SYNC_KEYS, HashSet(keys)).apply()
+    }
 }

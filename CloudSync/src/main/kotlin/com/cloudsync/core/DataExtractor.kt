@@ -21,6 +21,7 @@ class DataExtractor(private val context: Context) {
     companion object {
         private const val TAG = "CloudSync.DataExtractor"
         private const val REBUILD_PREFS_NAME = "rebuild_preference"
+        const val TOMBSTONE_VALUE = "__DELETED__"
     }
 
     private val objectMapper = ObjectMapper()
@@ -62,6 +63,7 @@ class DataExtractor(private val context: Context) {
 
     /**
      * Belirtilen veri tiplerine ait tüm SharedPreferences verilerini çıkarır.
+     * Silinen öğeleri tespit etmek için bilinen anahtarlarla (knownKeys) karşılaştırır.
      */
     fun extractData(dataTypes: List<SyncDataType>): List<SyncDataItem> {
         val items = mutableListOf<SyncDataItem>()
@@ -72,10 +74,36 @@ class DataExtractor(private val context: Context) {
         val defaultPrefs = PreferenceManager.getDefaultSharedPreferences(context)
         val rebuildPrefs = context.getSharedPreferences(REBUILD_PREFS_NAME, Context.MODE_PRIVATE)
 
-        extractFromPrefs(defaultPrefs, dataTypes, userId, deviceId, items, isRebuildPrefs = false)
-        extractFromPrefs(rebuildPrefs, dataTypes, userId, deviceId, items, isRebuildPrefs = true)
+        val currentKeys = mutableSetOf<String>()
 
-        Log.i(TAG, "Toplam ${items.size} veri çıkarıldı. Tipler: ${dataTypes.map { it.name }}")
+        extractFromPrefs(defaultPrefs, dataTypes, userId, deviceId, items, currentKeys, isRebuildPrefs = false)
+        extractFromPrefs(rebuildPrefs, dataTypes, userId, deviceId, items, currentKeys, isRebuildPrefs = true)
+
+        // Silinen verileri tespit et (Tombstone)
+        val knownKeys = SyncConfig.getKnownKeys(context)
+        if (knownKeys.isNotEmpty()) {
+            for (knownKey in knownKeys) {
+                if (!currentKeys.contains(knownKey)) {
+                    val isRebuild = knownKey.contains("/") || Regex("^[0-9]+/").containsMatchIn(knownKey)
+                    val dataType = SyncDataType.fromKey(knownKey, isRebuild) ?: continue
+                    if (dataTypes.contains(dataType)) {
+                        items.add(
+                            SyncDataItem(
+                                userId = userId,
+                                deviceId = deviceId,
+                                dataType = dataType.name,
+                                dataKey = knownKey,
+                                dataValue = TOMBSTONE_VALUE,
+                                updatedAt = null
+                            )
+                        )
+                        Log.i(TAG, "Silinmiş veri tespit edildi (Tombstone): $knownKey ($dataType)")
+                    }
+                }
+            }
+        }
+
+        Log.i(TAG, "Toplam ${items.size} veri çıkarıldı (${currentKeys.size} aktif). Tipler: ${dataTypes.map { it.name }}")
         return items
     }
 
@@ -88,6 +116,7 @@ class DataExtractor(private val context: Context) {
         userId: String,
         deviceId: String,
         items: MutableList<SyncDataItem>,
+        currentKeys: MutableSet<String>,
         isRebuildPrefs: Boolean
     ) {
         val allEntries = prefs.all ?: return
@@ -102,6 +131,8 @@ class DataExtractor(private val context: Context) {
 
             // Kullanıcı bu veri tipini senkronize etmek istiyor mu?
             if (!dataTypes.contains(dataType)) continue
+
+            currentKeys.add(key)
 
             // Değeri JSON string'e çevir
             val serializedValue = serializeValue(value) ?: continue
@@ -120,7 +151,7 @@ class DataExtractor(private val context: Context) {
     }
 
     /**
-     * Buluttan indirilen verileri local SharedPreferences'a yazar.
+     * Buluttan indirilen verileri local SharedPreferences'a yazar veya siler (tombstone).
      */
     fun applyData(items: List<SyncDataItem>) {
         val defaultPrefs = PreferenceManager.getDefaultSharedPreferences(context)
@@ -143,24 +174,44 @@ class DataExtractor(private val context: Context) {
             if (isNonTransferable(item.dataKey)) continue
             if (SyncConfig.isCloudSyncKey(item.dataKey)) continue
 
-            val value = item.dataValue ?: continue
-
-            // Hangi SharedPreferences'a yazılacağını belirle
-            // Hesap öneki veya rebuild_preference verileri rebuildEditor'e, saf ayarlar defaultEditor'e
             val isRebuildItem = item.dataType != SyncDataType.SETTINGS.name ||
                     item.dataKey.contains("/") ||
                     Regex("^[0-9]+/").containsMatchIn(item.dataKey)
 
             val editor = if (isRebuildItem) rebuildEditor else defaultEditor
+            val accountMatch = Regex("^([0-9]+)/(.*)").find(item.dataKey)
 
-            // Değeri geri yazarken tipini koru
+            val isDeleted = item.dataValue == null || item.dataValue == TOMBSTONE_VALUE
+            if (isDeleted) {
+                // SİLME İŞLEMİ (Tombstone):
+                editor.remove(item.dataKey)
+
+                if (accountMatch != null) {
+                    val relativePath = accountMatch.groupValues[2]
+                    rebuildEditor.remove("$currentAccount/$relativePath")
+
+                    // İlgili ikili anahtarları da temizle
+                    if (relativePath.startsWith("result_watch_state_data")) {
+                        val counterpart = relativePath.replace("result_watch_state_data", "result_watch_state")
+                        rebuildEditor.remove("$currentAccount/$counterpart")
+                        rebuildEditor.remove("${accountMatch.groupValues[1]}/$counterpart")
+                    }
+                    if (relativePath.startsWith("result_resume_watching")) {
+                        val counterpart = relativePath.replace("result_resume_watching", "result_resume_watching_2")
+                        rebuildEditor.remove("$currentAccount/$counterpart")
+                        rebuildEditor.remove("${accountMatch.groupValues[1]}/$counterpart")
+                    }
+                }
+                appliedCount++
+                continue
+            }
+
+            val value = item.dataValue ?: continue
+
+            // Normal veri yazma
             deserializeAndApply(editor, item.dataKey, value)
             appliedCount++
 
-            // EĞER anahtar bir hesap öneki içeriyorsa (örn. "0/result_favorites_state_data/123"):
-            // Ve bu cihazdaki aktif hesap kaynak hesaptan farklıysa,
-            // aktif hesap için de kopyala ki kullanıcı profili hangisi olursa olsun içerik görünsün.
-            val accountMatch = Regex("^([0-9]+)/(.*)").find(item.dataKey)
             if (accountMatch != null) {
                 val sourceAccount = accountMatch.groupValues[1]
                 val relativePath = accountMatch.groupValues[2]
@@ -173,7 +224,30 @@ class DataExtractor(private val context: Context) {
         defaultEditor.apply()
         rebuildEditor.apply()
 
-        Log.i(TAG, "$appliedCount veri uygulandı (Hedef aktif hesap: $currentAccount)")
+        Log.i(TAG, "$appliedCount veri uygulandı/silindi (Hedef aktif hesap: $currentAccount)")
+    }
+
+    /**
+     * Belirtilen tiplere ait mevcut tüm yerel anahtarları döndürür.
+     */
+    fun getAllCurrentKeys(dataTypes: List<SyncDataType>): Set<String> {
+        val keys = mutableSetOf<String>()
+        val defaultPrefs = PreferenceManager.getDefaultSharedPreferences(context)
+        val rebuildPrefs = context.getSharedPreferences(REBUILD_PREFS_NAME, Context.MODE_PRIVATE)
+
+        defaultPrefs.all?.keys?.forEach { key ->
+            if (!isNonTransferable(key) && !SyncConfig.isCloudSyncKey(key)) {
+                val type = SyncDataType.fromKey(key, isRebuildPrefs = false)
+                if (type != null && dataTypes.contains(type)) keys.add(key)
+            }
+        }
+        rebuildPrefs.all?.keys?.forEach { key ->
+            if (!isNonTransferable(key) && !SyncConfig.isCloudSyncKey(key)) {
+                val type = SyncDataType.fromKey(key, isRebuildPrefs = true)
+                if (type != null && dataTypes.contains(type)) keys.add(key)
+            }
+        }
+        return keys
     }
 
     /**

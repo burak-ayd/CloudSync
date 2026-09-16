@@ -39,7 +39,10 @@ class ConflictResolver {
         for ((compositeKey, localItem) in localMap) {
             val remoteItem = remoteMap[compositeKey]
             if (remoteItem == null) {
-                toUpload.add(localItem)
+                // Local'da silinmiş (tombstone) ve bulutta da zaten yoksa yüklemeye gerek yok
+                if (localItem.dataValue != DataExtractor.TOMBSTONE_VALUE) {
+                    toUpload.add(localItem)
+                }
             } else {
                 // Değerler tamamen aynıysa işlem yapmaya gerek yok
                 if (localItem.dataValue == remoteItem.dataValue) {
@@ -50,11 +53,11 @@ class ConflictResolver {
                 val remoteTime = parseTimestamp(remoteItem.updatedAt)
 
                 if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
-                    // Buluttaki veri daha yeni (son senkronizasyondan sonra güncellenmiş) → indir
+                    // Buluttaki veri daha yeni (son senkronizasyondan sonra güncellenmiş veya silinmiş) → indir
                     toDownload.add(remoteItem)
                     conflictCount++
                 } else {
-                    // Bu cihazda yerel olarak değişti veya güncellendi → yükle
+                    // Bu cihazda yerel olarak değişti veya silindi → yükle
                     toUpload.add(localItem)
                     conflictCount++
                 }
@@ -64,7 +67,10 @@ class ConflictResolver {
         // Remote'da olup local'da olmayanlar → indir
         for ((compositeKey, remoteItem) in remoteMap) {
             if (!localMap.containsKey(compositeKey)) {
-                toDownload.add(remoteItem)
+                // Bulutta zaten silinmiş (tombstone) ve yerelde de yoksa indirmeye gerek yok
+                if (remoteItem.dataValue != DataExtractor.TOMBSTONE_VALUE && remoteItem.dataValue != null) {
+                    toDownload.add(remoteItem)
+                }
             }
         }
 

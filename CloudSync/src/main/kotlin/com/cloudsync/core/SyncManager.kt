@@ -45,7 +45,8 @@ class SyncManager(private val context: Context) {
         val uploadedCount: Int = 0,
         val downloadedCount: Int = 0,
         val conflictsResolved: Int = 0,
-        val message: String = ""
+        val message: String = "",
+        val updatedTypes: List<SyncDataType> = emptyList()
     )
 
     // ==================== Ana Senkronizasyon İşlemleri ====================
@@ -135,10 +136,29 @@ class SyncManager(private val context: Context) {
                     downloadedCount = resolved.toDownload.size
                 }
 
-                // 6. Son senkronizasyon zamanını güncelle
+                // 6. Bilinen anahtarları (knownKeys) güncelle
+                val allCurrentKeys = dataExtractor.getAllCurrentKeys(enabledTypes)
+                SyncConfig.saveKnownKeys(context, allCurrentKeys)
+
+                // 7. Son senkronizasyon zamanını güncelle
                 SyncConfig.setLastSyncTime(context, System.currentTimeMillis())
 
-                // 7. Sync log kaydet
+                // 8. Hangi tiplerin güncellendiğini belirle
+                val updatedTypes = (resolved.toUpload + resolved.toDownload).mapNotNull { item ->
+                    try { SyncDataType.valueOf(item.dataType) } catch (_: Exception) { null }
+                }.distinct()
+
+                val summaryText = if (updatedTypes.isNotEmpty()) {
+                    updatedTypes.joinToString(", ") { it.displayName }
+                } else "Veriler"
+
+                val msg = if (downloadedCount > 0 || uploadedCount > 0) {
+                    "$summaryText güncellendi (↑$uploadedCount ↓$downloadedCount)"
+                } else {
+                    "Tüm verileriniz güncel"
+                }
+
+                // 9. Sync log kaydet
                 provider.logSync(
                     SyncLogEntry(
                         userId = userId,
@@ -154,7 +174,8 @@ class SyncManager(private val context: Context) {
                     uploadedCount = uploadedCount,
                     downloadedCount = downloadedCount,
                     conflictsResolved = resolved.conflictCount,
-                    message = "Senkronizasyon tamamlandı! ↑$uploadedCount ↓$downloadedCount"
+                    message = msg,
+                    updatedTypes = updatedTypes
                 )
 
                 callback?.onSyncCompleted(result)
@@ -203,6 +224,16 @@ class SyncManager(private val context: Context) {
                 val count = uploadResult.getOrDefault(0)
                 SyncConfig.setLastSyncTime(context, System.currentTimeMillis())
 
+                val allCurrentKeys = dataExtractor.getAllCurrentKeys(enabledTypes)
+                SyncConfig.saveKnownKeys(context, allCurrentKeys)
+
+                val updatedTypes = localItems.mapNotNull { item ->
+                    try { SyncDataType.valueOf(item.dataType) } catch (_: Exception) { null }
+                }.distinct()
+                val summaryText = if (updatedTypes.isNotEmpty()) {
+                    updatedTypes.joinToString(", ") { it.displayName }
+                } else "Veriler"
+
                 val userId = SyncConfig.getUserId(context)
                 val deviceId = SyncConfig.getDeviceId(context)
                 provider.logSync(
@@ -217,7 +248,8 @@ class SyncManager(private val context: Context) {
                 val result = SyncResult(
                     success = true,
                     uploadedCount = count,
-                    message = "↑ $count veri yüklendi"
+                    message = "↑ $count veri yüklendi ($summaryText)",
+                    updatedTypes = updatedTypes
                 )
                 callback?.onSyncCompleted(result)
                 return@withContext result
@@ -268,6 +300,16 @@ class SyncManager(private val context: Context) {
 
                 SyncConfig.setLastSyncTime(context, System.currentTimeMillis())
 
+                val allCurrentKeys = dataExtractor.getAllCurrentKeys(enabledTypes)
+                SyncConfig.saveKnownKeys(context, allCurrentKeys)
+
+                val updatedTypes = items.mapNotNull { item ->
+                    try { SyncDataType.valueOf(item.dataType) } catch (_: Exception) { null }
+                }.distinct()
+                val summaryText = if (updatedTypes.isNotEmpty()) {
+                    updatedTypes.joinToString(", ") { it.displayName }
+                } else "Veriler"
+
                 provider.logSync(
                     SyncLogEntry(
                         userId = userId,
@@ -280,7 +322,8 @@ class SyncManager(private val context: Context) {
                 val result = SyncResult(
                     success = true,
                     downloadedCount = items.size,
-                    message = "↓ ${items.size} veri indirildi"
+                    message = "↓ ${items.size} veri indirildi ($summaryText)",
+                    updatedTypes = updatedTypes
                 )
                 callback?.onSyncCompleted(result)
                 return@withContext result
