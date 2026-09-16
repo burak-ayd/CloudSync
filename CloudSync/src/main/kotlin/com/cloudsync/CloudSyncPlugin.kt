@@ -569,16 +569,19 @@ class CloudSyncPlugin : Plugin() {
             activity.runOnUiThread {
                 progressDialog.dismiss()
 
-                val icon = if (result?.success == true) "✅" else "❌"
-                Toast.makeText(
-                    activity,
-                    "$icon ${result?.message ?: "İşlem tamamlandı"}",
-                    Toast.LENGTH_LONG
-                ).show()
-
-                // Dialog'u yenile (son sync zamanı güncellenmiş olacak)
                 if (result?.success == true) {
+                    Toast.makeText(
+                        activity,
+                        "✅ ${result.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
                     showSyncDialog(activity)
+                } else {
+                    AlertDialog.Builder(activity)
+                        .setTitle("❌ Senkronizasyon Hatası")
+                        .setMessage(result?.message ?: "Bilinmeyen bir hata oluştu.")
+                        .setPositiveButton("Tamam", null)
+                        .show()
                 }
             }
         }

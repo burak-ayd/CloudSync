@@ -5,6 +5,7 @@ import android.util.Log
 import com.cloudsync.models.SyncConfig
 import com.cloudsync.models.SyncDataItem
 import com.cloudsync.models.SyncLogEntry
+import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -37,6 +38,7 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
 
     private val objectMapper = ObjectMapper().apply {
         configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+        setSerializationInclusion(JsonInclude.Include.NON_NULL)
     }
 
     private val httpClient = OkHttpClient.Builder()
@@ -65,11 +67,33 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
      */
     private fun Request.Builder.addSupabaseHeaders(): Request.Builder {
         val apiKey = getApiKey()
-        addHeader("apikey", apiKey)
-        addHeader("Authorization", "Bearer $apiKey")
-        addHeader("Content-Type", "application/json")
-        addHeader("Prefer", "return=minimal")
+        header("apikey", apiKey)
+        header("Authorization", "Bearer $apiKey")
+        header("Content-Type", "application/json")
+        header("Prefer", "return=minimal")
         return this
+    }
+
+    /**
+     * PostgREST hata JSON'ını okunaklı metne çevirir.
+     */
+    private fun extractErrorMessage(code: Int, body: String?): String {
+        if (body.isNullOrBlank()) return "HTTP $code"
+        return try {
+            val root = objectMapper.readTree(body)
+            val msg = root.path("message").asText(null)
+            val hint = root.path("hint").asText(null)
+            val details = root.path("details").asText(null)
+            val pgrstCode = root.path("code").asText(null)
+            val sb = StringBuilder()
+            if (!pgrstCode.isNullOrEmpty()) sb.append("[$pgrstCode] ")
+            if (!msg.isNullOrEmpty()) sb.append(msg)
+            if (!details.isNullOrEmpty()) sb.append(" | $details")
+            if (!hint.isNullOrEmpty()) sb.append(" (İpucu: $hint)")
+            if (sb.isEmpty()) "HTTP $code: $body" else sb.toString()
+        } catch (_: Exception) {
+            "HTTP $code: $body"
+        }
     }
 
     // ==================== Interface Implementasyonları ====================
@@ -94,9 +118,9 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
                 Log.i(TAG, "Bağlantı testi başarılı")
                 Result.success(true)
             } else {
-                val errorBody = response.body?.string() ?: "Bilinmeyen hata"
-                Log.e(TAG, "Bağlantı testi başarısız: ${response.code} - $errorBody")
-                Result.failure(Exception("HTTP ${response.code}: $errorBody"))
+                val errorMsg = extractErrorMessage(response.code, response.body?.string())
+                Log.e(TAG, "Bağlantı testi başarısız: $errorMsg")
+                Result.failure(Exception(errorMsg))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Bağlantı testi hatası", e)
@@ -135,9 +159,9 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
             val response = httpClient.newCall(request).execute()
 
             if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: "Bilinmeyen hata"
-                Log.e(TAG, "Veri indirme hatası: ${response.code} - $errorBody")
-                return@withContext Result.failure(Exception("HTTP ${response.code}: $errorBody"))
+                val errorMsg = extractErrorMessage(response.code, response.body?.string())
+                Log.e(TAG, "Veri indirme hatası: $errorMsg")
+                return@withContext Result.failure(Exception(errorMsg))
             }
 
             val body = response.body?.string() ?: "[]"
@@ -182,17 +206,15 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
                         .url(url)
                         .post(jsonBody.toRequestBody(JSON_MEDIA_TYPE))
                         .addSupabaseHeaders()
-                        .addHeader("Prefer", "resolution=merge-duplicates,return=minimal")
+                        .header("Prefer", "resolution=merge-duplicates,return=minimal")
                         .build()
 
                     val response = httpClient.newCall(request).execute()
 
                     if (!response.isSuccessful) {
-                        val errorBody = response.body?.string() ?: "Bilinmeyen hata"
-                        Log.e(TAG, "Batch yükleme hatası: ${response.code} - $errorBody")
-                        return@withContext Result.failure(
-                            Exception("HTTP ${response.code}: $errorBody")
-                        )
+                        val errorMsg = extractErrorMessage(response.code, response.body?.string())
+                        Log.e(TAG, "Batch yükleme hatası: $errorMsg")
+                        return@withContext Result.failure(Exception(errorMsg))
                     }
 
                     totalUploaded += batch.size
