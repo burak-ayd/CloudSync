@@ -76,7 +76,7 @@ object SyncConfig {
     // ==================== Senkronizasyon Ayarları ====================
 
     fun isAutoSyncEnabled(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_AUTO_SYNC, false)
+        return getPrefs(context).getBoolean(KEY_AUTO_SYNC, true)
     }
 
     fun setAutoSync(context: Context, enabled: Boolean) {
@@ -84,7 +84,7 @@ object SyncConfig {
     }
 
     fun isSyncOnLaunchEnabled(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_SYNC_ON_LAUNCH, false)
+        return getPrefs(context).getBoolean(KEY_SYNC_ON_LAUNCH, true)
     }
 
     fun setSyncOnLaunch(context: Context, enabled: Boolean) {

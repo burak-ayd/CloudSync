@@ -24,6 +24,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * CloudSync - CloudStream Senkronizasyon Eklentisi
@@ -56,6 +57,8 @@ class CloudSyncPlugin : Plugin() {
     private var syncScheduler: SyncScheduler? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    private var currentSettingsDialog: AlertDialog? = null
+
     override fun load(context: Context) {
         activity = context as? AppCompatActivity
         syncManager = SyncManager(context)
@@ -69,15 +72,31 @@ class CloudSyncPlugin : Plugin() {
         // Uygulama açılışında senkronize et (ayar aktifse)
         if (SyncConfig.isSyncOnLaunchEnabled(context) && SyncConfig.isConfigured(context)) {
             scope.launch(Dispatchers.IO) {
-                Log.i(TAG, "Açılışta otomatik senkronizasyon başlatılıyor...")
-                syncManager?.syncAll()
+                try {
+                    Log.i(TAG, "Açılışta otomatik senkronizasyon başlatılıyor...")
+                    val result = syncManager?.syncAll()
+                    if (result?.success == true && result.downloadedCount > 0) {
+                        Log.i(TAG, "Açılışta ${result.downloadedCount} yeni veri indirildi, UI yenileniyor...")
+                        notifyUIUpdate()
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                context,
+                                "☁️ CloudSync: ${result.downloadedCount} veri güncellendi",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Açılış senkronizasyon hatası", e)
+                }
             }
         }
 
         // Ayarlar butonunu kaydet
-        openSettings = { context ->
-            (context as? AppCompatActivity)?.let { activity ->
-                showSyncDialog(activity)
+        openSettings = { ctx ->
+            (ctx as? AppCompatActivity)?.let { act ->
+                this.activity = act
+                showSyncDialog(act)
             }
         }
 
@@ -85,9 +104,29 @@ class CloudSyncPlugin : Plugin() {
     }
 
     /**
+     * CloudStream arayüzünü güncellenen verilerle yenilemek için dahili event'leri tetikler.
+     */
+    private fun notifyUIUpdate() {
+        try {
+            com.lagradost.cloudstream3.MainActivity.bookmarksUpdatedEvent.invoke(true)
+        } catch (_: Throwable) {}
+        try {
+            com.lagradost.cloudstream3.MainActivity.reloadHomeEvent.invoke(true)
+        } catch (_: Throwable) {}
+        try {
+            com.lagradost.cloudstream3.MainActivity.reloadLibraryEvent.invoke(true)
+        } catch (_: Throwable) {}
+    }
+
+    /**
      * Ana senkronizasyon dialog'unu gösterir.
      */
     private fun showSyncDialog(activity: AppCompatActivity) {
+        this.activity = activity
+        try {
+            currentSettingsDialog?.dismiss()
+        } catch (_: Exception) {}
+
         val context = activity as Context
         val scrollView = ScrollView(context).apply {
             setPadding(0, 0, 0, 0)
@@ -119,7 +158,7 @@ class CloudSyncPlugin : Plugin() {
 
         scrollView.addView(mainLayout)
 
-        AlertDialog.Builder(activity, android.R.style.Theme_DeviceDefault_Dialog_NoActionBar)
+        currentSettingsDialog = AlertDialog.Builder(activity, android.R.style.Theme_DeviceDefault_Dialog_NoActionBar)
             .setView(scrollView)
             .show()
             .apply {
@@ -572,6 +611,13 @@ class CloudSyncPlugin : Plugin() {
                 if (result?.success == true) {
                     val hasDownloaded = result.downloadedCount > 0
                     if (hasDownloaded) {
+                        try {
+                            currentSettingsDialog?.dismiss()
+                            currentSettingsDialog = null
+                        } catch (_: Exception) {}
+
+                        notifyUIUpdate()
+
                         AlertDialog.Builder(activity)
                             .setTitle("✅ Senkronizasyon Tamamlandı")
                             .setMessage("${result.message}\n\nİndirilen favorilerin, listelerin ve izleme geçmişinin CloudStream ana ekranında ve kütüphanede görünmesi için uygulamanın yeniden başlatılması gerekmektedir.")
@@ -580,11 +626,13 @@ class CloudSyncPlugin : Plugin() {
                                     val intent = activity.intent
                                     activity.finish()
                                     activity.startActivity(intent)
-                                } catch (e: Exception) {
+                                } catch (_: Exception) {
                                     activity.recreate()
                                 }
                             }
-                            .setNegativeButton("Daha Sonra", null)
+                            .setNegativeButton("Daha Sonra") { _, _ ->
+                                showSyncDialog(activity)
+                            }
                             .show()
                     } else {
                         Toast.makeText(
@@ -592,8 +640,8 @@ class CloudSyncPlugin : Plugin() {
                             "✅ ${result.message}",
                             Toast.LENGTH_LONG
                         ).show()
+                        showSyncDialog(activity)
                     }
-                    showSyncDialog(activity)
                 } else {
                     AlertDialog.Builder(activity)
                         .setTitle("❌ Senkronizasyon Hatası")

@@ -49,12 +49,8 @@ class ConflictResolver {
                 // Değerler farklı:
                 val remoteTime = parseTimestamp(remoteItem.updatedAt)
 
-                if (lastSyncTime == 0L) {
-                    // Cihaz ilk defa senkronize oluyorsa bulut verisini tercih et
-                    toDownload.add(remoteItem)
-                    conflictCount++
-                } else if (remoteTime > lastSyncTime && remoteItem.deviceId != localItem.deviceId) {
-                    // Başka bir cihaz son senkronizasyonumuzdan SONRA güncellemiş → indir
+                if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
+                    // Buluttaki veri daha yeni (son senkronizasyondan sonra güncellenmiş) → indir
                     toDownload.add(remoteItem)
                     conflictCount++
                 } else {
