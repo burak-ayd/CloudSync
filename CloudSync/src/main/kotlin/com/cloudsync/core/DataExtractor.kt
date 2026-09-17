@@ -82,6 +82,20 @@ class DataExtractor(private val context: Context) {
 
     private val objectMapper = ObjectMapper()
 
+    private fun getCurrentAccountId(): String {
+        return try {
+            com.lagradost.cloudstream3.utils.DataStoreHelper.currentAccount
+        } catch (_: Exception) {
+            "0"
+        }
+    }
+
+    private fun nowIso(): String {
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+        sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        return sdf.format(java.util.Date())
+    }
+
     /**
      * Belirtilen veri tiplerine ait verileri çıkarır.
      * SETTINGS ve SEARCH_HISTORY demet olarak, BOOKMARKS, WATCH_PROGRESS ve REPOS
@@ -91,6 +105,7 @@ class DataExtractor(private val context: Context) {
         val items = mutableListOf<SyncDataItem>()
         val userId = SyncConfig.getUserId(context)
         val deviceId = SyncConfig.getDeviceId(context)
+        val now = nowIso()
 
         val defaultPrefs = PreferenceManager.getDefaultSharedPreferences(context)
         val dataPrefs = context.getSharedPreferences(REBUILD_PREFS_NAME, Context.MODE_PRIVATE)
@@ -126,7 +141,7 @@ class DataExtractor(private val context: Context) {
                     dataType = SyncDataType.SETTINGS.name,
                     dataKey = SETTINGS_BUNDLE_KEY,
                     dataValue = bundleJson,
-                    updatedAt = null
+                    updatedAt = now
                 )
             )
             Log.i(TAG, "Ayarlar demeti oluşturuldu: ${rebuildSettings.size} rebuild, ${defaultSettings.size} default")
@@ -149,6 +164,21 @@ class DataExtractor(private val context: Context) {
                 }
             }
 
+            // Eğer spesifik alt anahtarlar varsa (örneğin "0/search_history/2068224914"),
+            // eski sürümlerin yanlışlıkla yazdığı kök anahtarları ("search_history", "0/search_history") temizle
+            val hasSubkeys = rebuildSearch.keys.any { it.matches(Regex(".*/search_history/.+")) } ||
+                    defaultSearch.keys.any { it.matches(Regex(".*/search_history/.+")) }
+            if (hasSubkeys) {
+                rebuildSearch.remove("search_history")
+                rebuildSearch.remove("0/search_history")
+                val acc = getCurrentAccountId()
+                rebuildSearch.remove("$acc/search_history")
+
+                defaultSearch.remove("search_history")
+                defaultSearch.remove("0/search_history")
+                defaultSearch.remove("$acc/search_history")
+            }
+
             val isSearchEmpty = (rebuildSearch.isEmpty() && defaultSearch.isEmpty()) ||
                     (rebuildSearch.values.all { it == "s:[]" || it == "s:\"\"" || it == "EMPTY" || it == "s:{}" } &&
                      defaultSearch.values.all { it == "s:[]" || it == "s:\"\"" || it == "EMPTY" || it == "s:{}" })
@@ -166,7 +196,7 @@ class DataExtractor(private val context: Context) {
                     dataType = SyncDataType.SEARCH_HISTORY.name,
                     dataKey = SEARCH_HISTORY_BUNDLE_KEY,
                     dataValue = searchBundleValue,
-                    updatedAt = null
+                    updatedAt = now
                 )
             )
             Log.i(TAG, "Arama geçmişi demeti oluşturuldu: ${if (isSearchEmpty) "TEMİZ / BOŞ" else "${rebuildSearch.size} rebuild, ${defaultSearch.size} default"}")
@@ -179,8 +209,8 @@ class DataExtractor(private val context: Context) {
 
         if (otherTypes.isNotEmpty()) {
             val currentKeys = mutableSetOf<String>()
-            extractFromPrefs(defaultPrefs, otherTypes, userId, deviceId, items, currentKeys, isRebuildPrefs = false)
-            extractFromPrefs(dataPrefs, otherTypes, userId, deviceId, items, currentKeys, isRebuildPrefs = true)
+            extractFromPrefs(defaultPrefs, otherTypes, userId, deviceId, items, currentKeys, isRebuildPrefs = false, now = now)
+            extractFromPrefs(dataPrefs, otherTypes, userId, deviceId, items, currentKeys, isRebuildPrefs = true, now = now)
 
             // Silinen öğeleri tespit et (Tombstone)
             val knownKeys = SyncConfig.getKnownKeys(context)
@@ -200,7 +230,7 @@ class DataExtractor(private val context: Context) {
                                         dataType = dataType.name,
                                         dataKey = knownKey,
                                         dataValue = TOMBSTONE_VALUE,
-                                        updatedAt = null
+                                        updatedAt = now
                                     )
                                 )
                                 Log.i(TAG, "Silinmiş veri tespit edildi (Tombstone): $knownKey ($dataType)")
@@ -225,7 +255,8 @@ class DataExtractor(private val context: Context) {
         deviceId: String,
         items: MutableList<SyncDataItem>,
         currentKeys: MutableSet<String>,
-        isRebuildPrefs: Boolean
+        isRebuildPrefs: Boolean,
+        now: String
     ) {
         val allEntries = prefs.all ?: return
 
@@ -246,7 +277,7 @@ class DataExtractor(private val context: Context) {
                     dataType = dataType.name,
                     dataKey = key,
                     dataValue = serializedValue,
-                    updatedAt = null
+                    updatedAt = now
                 )
             )
         }
@@ -325,29 +356,95 @@ class DataExtractor(private val context: Context) {
                     try {
                         val bundle = objectMapper.readValue(value, PrefsBundle::class.java)
 
-                        bundle.rebuild.forEach { (k, v) ->
-                            deserializeAndApply(rebuildEditor, k, v)
-                            // CloudStream'in kesin olarak okuduğu standart anahtarlara da yaz
-                            deserializeAndApply(rebuildEditor, "search_history", v)
-                            deserializeAndApply(rebuildEditor, "0/search_history", v)
-                            if (currentAccount != "0") {
-                                deserializeAndApply(rebuildEditor, "$currentAccount/search_history", v)
+                        fun applySearchEntry(rawKey: String, rawVal: String) {
+                            var searchKey: String? = null
+                            val lastPart = rawKey.substringAfterLast('/')
+                            if (lastPart.isNotBlank() && lastPart != "search_history") {
+                                searchKey = lastPart
+                            }
+
+                            if (searchKey == null) {
+                                try {
+                                    val cleanJson = if (rawVal.startsWith("s:")) rawVal.substring(2) else rawVal
+                                    if (cleanJson.startsWith("{")) {
+                                        val node = objectMapper.readTree(cleanJson)
+                                        val k = node.path("key").asText(null)
+                                        val text = node.path("searchText").asText(null)
+                                        searchKey = when {
+                                            !k.isNullOrBlank() -> k
+                                            !text.isNullOrBlank() -> text.hashCode().toString()
+                                            else -> null
+                                        }
+                                    }
+                                } catch (_: Exception) {}
+                            }
+
+                            // rawVal bir JSON dizisi ise her birini ayrı arama kaydı olarak yaz
+                            try {
+                                val cleanJson = if (rawVal.startsWith("s:")) rawVal.substring(2) else rawVal
+                                if (cleanJson.startsWith("[")) {
+                                    val arr = objectMapper.readTree(cleanJson)
+                                    if (arr.isArray) {
+                                        for (elem in arr) {
+                                            val text = if (elem.isObject) elem.path("searchText").asText(elem.asText()) else elem.asText()
+                                            if (!text.isNullOrBlank()) {
+                                                val elemKey = if (elem.isObject && elem.has("key")) elem.get("key").asText() else text.hashCode().toString()
+                                                val elemVal = if (elem.isObject) "s:${objectMapper.writeValueAsString(elem)}" else "s:{\"searchedAt\":${System.currentTimeMillis()},\"searchText\":\"$text\",\"type\":[],\"key\":\"$elemKey\"}"
+
+                                                deserializeAndApply(rebuildEditor, "0/search_history/$elemKey", elemVal)
+                                                if (currentAccount != "0") {
+                                                    deserializeAndApply(rebuildEditor, "$currentAccount/search_history/$elemKey", elemVal)
+                                                }
+                                                deserializeAndApply(defaultEditor, "0/search_history/$elemKey", elemVal)
+                                                if (currentAccount != "0") {
+                                                    deserializeAndApply(defaultEditor, "$currentAccount/search_history/$elemKey", elemVal)
+                                                }
+                                            }
+                                        }
+                                        return
+                                    }
+                                }
+                            } catch (_: Exception) {}
+
+                            if (!searchKey.isNullOrBlank()) {
+                                val k0 = "0/search_history/$searchKey"
+                                deserializeAndApply(rebuildEditor, k0, rawVal)
+                                deserializeAndApply(defaultEditor, k0, rawVal)
+                                if (currentAccount != "0") {
+                                    val kAcc = "$currentAccount/search_history/$searchKey"
+                                    deserializeAndApply(rebuildEditor, kAcc, rawVal)
+                                    deserializeAndApply(defaultEditor, kAcc, rawVal)
+                                }
+                            } else {
+                                deserializeAndApply(rebuildEditor, rawKey, rawVal)
+                                deserializeAndApply(defaultEditor, rawKey, rawVal)
                             }
                         }
+
+                        bundle.rebuild.forEach { (k, v) ->
+                            applySearchEntry(k, v)
+                        }
                         bundle.default.forEach { (k, v) ->
-                            deserializeAndApply(defaultEditor, k, v)
-                            deserializeAndApply(defaultEditor, "search_history", v)
-                            deserializeAndApply(defaultEditor, "0/search_history", v)
-                            if (currentAccount != "0") {
-                                deserializeAndApply(defaultEditor, "$currentAccount/search_history", v)
-                            }
+                            applySearchEntry(k, v)
                         }
                         Log.i(TAG, "Yeni arama geçmişi uygulandı: ${bundle.rebuild.size} rebuild, ${bundle.default.size} default")
                     } catch (e: Exception) {
                         Log.w(TAG, "Arama geçmişi bundle okunamadı, doğrudan string olarak deneniyor: ${e.message}")
-                        deserializeAndApply(rebuildEditor, "search_history", value)
-                        deserializeAndApply(rebuildEditor, "0/search_history", value)
-                        deserializeAndApply(rebuildEditor, "$currentAccount/search_history", value)
+                        try {
+                            val cleanJson = if (value.startsWith("s:")) value.substring(2) else value
+                            if (cleanJson.startsWith("{")) {
+                                val node = objectMapper.readTree(cleanJson)
+                                val k = node.path("key").asText(null) ?: node.path("searchText").asText(null)?.hashCode()?.toString()
+                                if (!k.isNullOrBlank()) {
+                                    deserializeAndApply(rebuildEditor, "0/search_history/$k", value)
+                                    deserializeAndApply(defaultEditor, "0/search_history/$k", value)
+                                    if (currentAccount != "0") {
+                                        deserializeAndApply(rebuildEditor, "$currentAccount/search_history/$k", value)
+                                        deserializeAndApply(defaultEditor, "$currentAccount/search_history/$k", value)
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) {}
                     }
                 }
                 appliedCount++

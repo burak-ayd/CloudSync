@@ -73,16 +73,12 @@ class ConflictResolver {
 
                 // 1. SETTINGS (Uygulama Ayarları Demeti):
                 if (dataType == SyncDataType.SETTINGS) {
-                    // Buluttaki ayarlar son başarılı senkronizasyondan daha yeniyse (veya ilk senkronizasyonsa) KESİNLİKLE İNDİR!
-                    if (remoteTime > lastSyncTime || lastSyncTime == 0L) {
-                        Log.i(TAG, "Bulut ayarları daha yeni (remoteTime=$remoteTime > lastSync=$lastSyncTime) -> İndiriliyor")
-                        toDownload.add(remoteItem)
-                    } else if (isLocallyDirty) {
-                        // Kullanıcı buluttaki son güncellemeden sonra bu cihazda ayar değiştirdi -> Yükle
-                        Log.i(TAG, "Yerel ayarlar değişti (isLocallyDirty) -> Yükleniyor")
+                    if (isLocallyDirty) {
+                        Log.i(TAG, "Yerel ayarlar bu cihazda değiştirildi (isLocallyDirty=true) -> Yükleniyor")
                         toUpload.add(localItem)
                     } else {
-                        Log.i(TAG, "Ayarlar güncel, işlem yapılmadı")
+                        Log.i(TAG, "Buluttaki ayarlar yerelden farklı ve yerel kirli değil -> İndiriliyor")
+                        toDownload.add(remoteItem)
                     }
                     conflictCount++
                     continue
@@ -90,16 +86,12 @@ class ConflictResolver {
 
                 // 2. SEARCH_HISTORY (Arama Geçmişi Demeti):
                 if (dataType == SyncDataType.SEARCH_HISTORY) {
-                    // Buluttaki arama geçmişi son senkronizasyondan daha yeniyse (veya ilk senkronizasyonsa) KESİNLİKLE İNDİR!
-                    if (remoteTime > lastSyncTime || lastSyncTime == 0L) {
-                        Log.i(TAG, "Bulut arama geçmişi daha yeni (remoteTime=$remoteTime > lastSync=$lastSyncTime) -> İndiriliyor")
-                        toDownload.add(remoteItem)
-                    } else if (isLocallyDirty) {
-                        // Kullanıcı buluttaki son güncellemeden sonra bu cihazda arama yaptı/sildi -> Yükle
-                        Log.i(TAG, "Yerel arama geçmişi değişti (isLocallyDirty) -> Yükleniyor")
+                    if (isLocallyDirty) {
+                        Log.i(TAG, "Yerel arama geçmişi bu cihazda değiştirildi (isLocallyDirty=true) -> Yükleniyor")
                         toUpload.add(localItem)
                     } else {
-                        Log.i(TAG, "Arama geçmişi güncel, işlem yapılmadı")
+                        Log.i(TAG, "Buluttaki arama geçmişi yerelden farklı ve yerel kirli değil -> İndiriliyor")
+                        toDownload.add(remoteItem)
                     }
                     conflictCount++
                     continue
@@ -108,12 +100,8 @@ class ConflictResolver {
                 // 3. BOOKMARKS, WATCH_PROGRESS, REPOS ve diğerleri:
                 if (isLocallyDirty) {
                     toUpload.add(localItem)
-                } else if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
-                    // Buluttaki veri daha yeni (veya ilk senkronizasyon) -> İndir
-                    toDownload.add(remoteItem)
                 } else {
-                    // Yerel veri daha yeni -> Yükle
-                    toUpload.add(localItem)
+                    toDownload.add(remoteItem)
                 }
                 conflictCount++
             }

@@ -208,8 +208,16 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
                 val batchSize = 100
                 var totalUploaded = 0
 
+                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }
+                val nowIso = sdf.format(java.util.Date())
+
                 for (batch in items.chunked(batchSize)) {
-                    val jsonBody = objectMapper.writeValueAsString(batch)
+                    val batchWithTimestamp = batch.map { item ->
+                        if (item.updatedAt.isNullOrBlank()) item.copy(updatedAt = nowIso) else item
+                    }
+                    val jsonBody = objectMapper.writeValueAsString(batchWithTimestamp)
 
                     val request = Request.Builder()
                         .url(url)

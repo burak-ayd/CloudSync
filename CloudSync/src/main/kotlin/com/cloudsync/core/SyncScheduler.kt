@@ -468,7 +468,7 @@ class SyncScheduler(private val context: Context) {
                 currentActivity?.let { act ->
                     act.runOnUiThread {
                         try {
-                            if (act.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                            if (!act.isFinishing && !act.isDestroyed) {
                                 Log.i(TAG, "Ayarlar veya arama geçmişi güncellendi -> Activity yeniden yükleniyor (recreate)")
                                 act.recreate()
                             }

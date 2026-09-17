@@ -136,7 +136,7 @@ class CloudSyncPlugin : Plugin() {
             act?.let { a ->
                 a.runOnUiThread {
                     try {
-                        if (a.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                        if (!a.isFinishing && !a.isDestroyed) {
                             Log.i(TAG, "Ayarlar veya arama geçmişi güncellendi -> Activity recreate ediliyor")
                             a.recreate()
                         }
