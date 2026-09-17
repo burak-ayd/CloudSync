@@ -196,7 +196,7 @@ class SyncScheduler(private val context: Context) {
 
             // Key'in hangi veri tipine ait olduğunu belirle
             val dataType = classifyKey(key)
-            if (dataType != null && SyncConfig.isSyncEnabled(context, dataType)) {
+            if (SyncConfig.isSyncEnabled(context, dataType)) {
                 Log.d(TAG, "Pref değişikliği algılandı: $key → ${dataType.displayName}")
                 markDirty(dataType)
             }
@@ -454,8 +454,7 @@ class SyncScheduler(private val context: Context) {
      * SharedPreferences key'ini hangi SyncDataType'a ait olduğunu belirler.
      * DataExtractor'daki SyncDataType.fromKey ile aynı mantığı kullanır.
      */
-    private fun classifyKey(key: String): SyncDataType? {
-        return SyncDataType.fromKey(key, isRebuildPrefs = false)
-            ?: SyncDataType.fromKey(key, isRebuildPrefs = true)
+    private fun classifyKey(key: String): SyncDataType {
+        return SyncDataType.fromKey(key)
     }
 }

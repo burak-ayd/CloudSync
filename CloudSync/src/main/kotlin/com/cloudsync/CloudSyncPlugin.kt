@@ -297,7 +297,84 @@ class CloudSyncPlugin : Plugin() {
         activity: AppCompatActivity
     ): LinearLayout {
         return createCard(context).apply {
-            addView(createSectionTitle(context, "⚙️ Supabase Ayarları"))
+            // ==================== ⚡ HIZLI KURULUM (TEK LİNK) ====================
+            addView(createSectionTitle(context, "⚡ Hızlı Kurulum (Tek Link)"))
+
+            val quickLinkLayout = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(4), 0, dp(6))
+
+                // Panodan Yapıştır Butonu
+                addView(createButton(context, "📋 Panodan Yapıştır", COLOR_PRIMARY).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(4) }
+                    setOnClickListener {
+                        try {
+                            val clipMgr = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                            val clipText = clipMgr?.primaryClip?.getItemAt(0)?.text?.toString()?.trim() ?: ""
+                            if (clipText.isNotEmpty()) {
+                                val success = SyncConfig.parseAndApplyConnectionLink(context, clipText)
+                                if (success) {
+                                    Toast.makeText(context, "✅ Bağlantı linki başarıyla uygulandı!", Toast.LENGTH_SHORT).show()
+                                    showSyncDialog(activity)
+                                    testConnection(activity)
+                                } else {
+                                    Toast.makeText(context, "❌ Geçersiz bağlantı linki. Link formatını kontrol edin.", Toast.LENGTH_LONG).show()
+                                }
+                            } else {
+                                Toast.makeText(context, "Panoda kopyalanmış bir link bulunamadı.", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Pano okunamadı: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                })
+
+                // Manuel Link Girişi Butonu
+                addView(createButton(context, "✏️ Link Gir", "#4B5563").apply {
+                    layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(4) }
+                    setOnClickListener {
+                        showInputDialog(activity, "Hızlı Bağlantı Linki", "", "https://xyz.supabase.co#key=...&user=...") { link ->
+                            val success = SyncConfig.parseAndApplyConnectionLink(context, link)
+                            if (success) {
+                                Toast.makeText(context, "✅ Bağlantı linki başarıyla uygulandı!", Toast.LENGTH_SHORT).show()
+                                showSyncDialog(activity)
+                                testConnection(activity)
+                            } else {
+                                Toast.makeText(context, "❌ Geçersiz bağlantı linki", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                })
+            }
+            addView(quickLinkLayout)
+
+            // Bu Cihazın Linkini Kopyala Butonu (Eğer yapılandırılmışsa diğer cihaza aktarmak için)
+            if (SyncConfig.isConfigured(context)) {
+                addView(createButton(context, "🔗 Bu Cihazın Linkini Kopyala (Diğer Cihaz İçin)", "#2563EB").apply {
+                    (layoutParams as? LinearLayout.LayoutParams)?.topMargin = dp(2)
+                    (layoutParams as? LinearLayout.LayoutParams)?.bottomMargin = dp(6)
+                    setOnClickListener {
+                        val link = SyncConfig.generateConnectionLink(context)
+                        if (link.isNotEmpty()) {
+                            val clipMgr = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                            clipMgr?.setPrimaryClip(android.content.ClipData.newPlainText("CloudSync Link", link))
+                            Toast.makeText(context, "📋 Bağlantı linki kopyalandı! Diğer cihazda 'Panodan Yapıştır' butonuna basmanız yeterlidir.", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                })
+            }
+
+            // Ayrıcı Çizgi
+            addView(View(context).apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)).apply {
+                    topMargin = dp(6)
+                    bottomMargin = dp(8)
+                }
+                setBackgroundColor(Color.parseColor("#374151"))
+            })
+
+            // ==================== 🛠️ MANUEL AYARLAR ====================
+            addView(createSectionTitle(context, "🛠️ Manuel Ayarlar (İsteğe Bağlı)"))
 
             // URL
             addView(createSettingRow(context, "API URL", SyncConfig.getSupabaseUrl(context).ifEmpty { "Girilmedi" }) {

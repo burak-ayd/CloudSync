@@ -184,4 +184,93 @@ object SyncConfig {
     fun saveKnownKeys(context: Context, keys: Set<String>) {
         getPrefs(context).edit().putStringSet(KEY_KNOWN_SYNC_KEYS, HashSet(keys)).apply()
     }
+
+    // ==================== Tek Linkle Kurulum (Magic Link) ====================
+
+    /**
+     * Hızlı Kurulum Bağlantısı (Magic Link / Connection String) ayrıştırır ve ayarları anında uygular.
+     * Desteklenen formatlar:
+     * 1. https://xyz.supabase.co#key=eyJ...&user=kullanici (Fragment tabanlı)
+     * 2. https://xyz.supabase.co?apikey=eyJ...&user_id=kullanici (Query param tabanlı)
+     * 3. cloudsync://<base64>
+     */
+    fun parseAndApplyConnectionLink(context: Context, rawLink: String): Boolean {
+        val link = rawLink.trim()
+        if (link.isEmpty()) return false
+
+        try {
+            // 1. cloudsync:// formatı
+            if (link.startsWith("cloudsync://", ignoreCase = true)) {
+                val encoded = link.substringAfter("://")
+                val decoded = String(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT))
+                val json = com.fasterxml.jackson.databind.ObjectMapper().readTree(decoded)
+                val url = json.path("url").asText("")
+                val key = json.path("key").asText("")
+                val user = json.path("user").asText("")
+                if (url.isNotEmpty() && key.isNotEmpty()) {
+                    setSupabaseUrl(context, url)
+                    setSupabaseKey(context, key)
+                    if (user.isNotEmpty()) setUserId(context, user)
+                    else if (getUserId(context).isEmpty()) setUserId(context, "user_${(1000..9999).random()}")
+                    return true
+                }
+            }
+
+            // 2. Standart HTTP URL formatı
+            val uri = android.net.Uri.parse(link)
+            val host = uri.host ?: return false
+            val scheme = uri.scheme ?: "https"
+            val baseUrl = "$scheme://$host"
+
+            var key: String? = null
+            var user: String? = null
+
+            // Fragment (#key=...&user=...) kontrolü
+            val fragment = uri.fragment
+            if (!fragment.isNullOrEmpty()) {
+                val params = fragment.split("&").associate {
+                    val parts = it.split("=", limit = 2)
+                    if (parts.size == 2) parts[0] to parts[1] else parts[0] to ""
+                }
+                key = params["key"] ?: params["apikey"] ?: params["anon_key"]
+                user = params["user"] ?: params["user_id"] ?: params["userId"]
+            }
+
+            // Query params (?apikey=...&user_id=...) kontrolü
+            if (key.isNullOrEmpty()) {
+                key = uri.getQueryParameter("key")
+                    ?: uri.getQueryParameter("apikey")
+                    ?: uri.getQueryParameter("anon_key")
+            }
+            if (user.isNullOrEmpty()) {
+                user = uri.getQueryParameter("user")
+                    ?: uri.getQueryParameter("user_id")
+                    ?: uri.getQueryParameter("userId")
+            }
+
+            if (!key.isNullOrEmpty()) {
+                setSupabaseUrl(context, baseUrl)
+                setSupabaseKey(context, key)
+                if (!user.isNullOrEmpty()) {
+                    setUserId(context, user)
+                } else if (getUserId(context).isEmpty()) {
+                    setUserId(context, "user_${(1000..9999).random()}")
+                }
+                return true
+            }
+        } catch (_: Exception) {}
+
+        return false
+    }
+
+    /**
+     * Diğer cihazlara tek tıkla kurulum yapabilmek için paylaşılabilir bağlantı linki üretir.
+     */
+    fun generateConnectionLink(context: Context): String {
+        val url = getSupabaseUrl(context)
+        val key = getSupabaseKey(context)
+        val user = getUserId(context)
+        if (url.isEmpty() || key.isEmpty()) return ""
+        return "$url#key=$key&user=$user"
+    }
 }

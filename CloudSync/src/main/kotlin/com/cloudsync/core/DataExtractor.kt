@@ -29,36 +29,38 @@ class DataExtractor(private val context: Context) {
     /**
      * Güvenlik nedeniyle senkronize EDİLMEYECEK key'ler.
      * Token, şifre ve cihaza özel ayarlar bu listede yer alır.
+     * Referans CloudStream sync-plugin ile birebir uyumlu tam liste.
      */
     private val nonTransferableKeys = setOf(
-        // Hesap token'ları
-        "anilist_token", "anilist_user",
-        "mal_token", "mal_user",
-        "kitsu_token", "kitsu_user",
-        "simkl_token", "simkl_user",
+        // Hesap token'ları ve oturumlar
+        "anilist_token", "anilist_user", "anilist_unixtime", "anilist_cached_list", "anilist_accounts", "anilist_active",
+        "mal_token", "mal_user", "mal_cached_list", "mal_unixtime", "mal_refresh_token", "mal_accounts", "mal_active",
+        "kitsu_token", "kitsu_user", "kitsu_cached_list",
+        "simkl_token", "simkl_user", "simkl_cached_list", "simkl_cached_time", "simkl_accounts", "simkl_active", "simkl_api_cache", "aniwave_simkl_sync",
         "account_token", "account_ids",
+        "open_subtitles_user", "opensubtitles_accounts", "opensubtitles_active",
+        "subdl_user", "subdl_accounts", "subdl_active",
 
-        // Cihaza özel ayarlar
+        // Cihaza özel ayarlar ve dosya yolları
         "biometric_key",
         "nginx_user",
         "download_path_key",
         "download_path_key_visual",
         "backup_path_key",
         "backup_dir_path_key",
+        "download_info", "download_resume", "download_q_resume", "download_episode_cache",
+        "cs3-votes", "last_sync_api", "last_click_action", "last_opened_id",
+        "library_folder", "viewpager_item_key", "data_store_helper/account_key_index",
+        "version_name", "files_to_delete_key", "has_done_setup",
+        "fshare_setup", "fshare_token", "bluphim_token",
 
-        // Cache verileri (geçici, senkronize etmeye gerek yok)
-        "anilist_cached_list",
-        "mal_cached_list",
-        "kitsu_cached_list",
-
-        // Plugin binary verileri
-        "PLUGINS_KEY",
-        "PLUGINS_KEY_LOCAL"
+        // Plugin binary ve eklenti yerel verileri
+        "plugins_key_local"
     )
 
     private fun isNonTransferable(key: String): Boolean {
         val lower = key.lowercase()
-        return nonTransferableKeys.any { lower.contains(it.lowercase()) }
+        return nonTransferableKeys.any { lower.contains(it) }
     }
 
     /**
@@ -79,25 +81,55 @@ class DataExtractor(private val context: Context) {
         extractFromPrefs(defaultPrefs, dataTypes, userId, deviceId, items, currentKeys, isRebuildPrefs = false)
         extractFromPrefs(rebuildPrefs, dataTypes, userId, deviceId, items, currentKeys, isRebuildPrefs = true)
 
+        // Arama Geçmişi özel kontrolü (boş arama listesi silinmiş sayılır)
+        if (dataTypes.contains(SyncDataType.SEARCH_HISTORY)) {
+            val searchItem = items.find { it.dataType == SyncDataType.SEARCH_HISTORY.name }
+            val isSearchEmpty = searchItem == null ||
+                    searchItem.dataValue == null ||
+                    searchItem.dataValue == "s:[]" ||
+                    searchItem.dataValue == "ss:[]" ||
+                    searchItem.dataValue == "s:\"\"" ||
+                    searchItem.dataValue == "s:{}"
+
+            if (isSearchEmpty) {
+                // Yerelde arama geçmişi boşaltılmış veya silinmiş!
+                items.removeAll { it.dataType == SyncDataType.SEARCH_HISTORY.name }
+                items.add(
+                    SyncDataItem(
+                        userId = userId,
+                        deviceId = deviceId,
+                        dataType = SyncDataType.SEARCH_HISTORY.name,
+                        dataKey = "search_history",
+                        dataValue = TOMBSTONE_VALUE,
+                        updatedAt = null
+                    )
+                )
+                Log.i(TAG, "Arama geçmişi boş veya temizlenmiş tespit edildi -> Tombstone eklendi")
+            }
+        }
+
         // Silinen verileri tespit et (Tombstone)
         val knownKeys = SyncConfig.getKnownKeys(context)
         if (knownKeys.isNotEmpty()) {
             for (knownKey in knownKeys) {
                 if (!currentKeys.contains(knownKey)) {
                     val isRebuild = knownKey.contains("/") || Regex("^[0-9]+/").containsMatchIn(knownKey)
-                    val dataType = SyncDataType.fromKey(knownKey, isRebuild) ?: continue
+                    val dataType = SyncDataType.fromKey(knownKey, isRebuild)
                     if (dataTypes.contains(dataType)) {
-                        items.add(
-                            SyncDataItem(
-                                userId = userId,
-                                deviceId = deviceId,
-                                dataType = dataType.name,
-                                dataKey = knownKey,
-                                dataValue = TOMBSTONE_VALUE,
-                                updatedAt = null
+                        // Eğer zaten eklenmemişse ekle
+                        if (items.none { it.dataKey == knownKey }) {
+                            items.add(
+                                SyncDataItem(
+                                    userId = userId,
+                                    deviceId = deviceId,
+                                    dataType = dataType.name,
+                                    dataKey = knownKey,
+                                    dataValue = TOMBSTONE_VALUE,
+                                    updatedAt = null
+                                )
                             )
-                        )
-                        Log.i(TAG, "Silinmiş veri tespit edildi (Tombstone): $knownKey ($dataType)")
+                            Log.i(TAG, "Silinmiş veri tespit edildi (Tombstone): $knownKey ($dataType)")
+                        }
                     }
                 }
             }
@@ -127,7 +159,7 @@ class DataExtractor(private val context: Context) {
             if (isNonTransferable(key)) continue
 
             // Bu key hangi veri tipine ait?
-            val dataType = SyncDataType.fromKey(key, isRebuildPrefs) ?: continue
+            val dataType = SyncDataType.fromKey(key, isRebuildPrefs)
 
             // Kullanıcı bu veri tipini senkronize etmek istiyor mu?
             if (!dataTypes.contains(dataType)) continue
@@ -180,14 +212,61 @@ class DataExtractor(private val context: Context) {
             if (isNonTransferable(item.dataKey)) continue
             if (SyncConfig.isCloudSyncKey(item.dataKey)) continue
 
-            val isRebuildItem = item.dataType != SyncDataType.SETTINGS.name ||
-                    item.dataKey.contains("/") ||
+            val isDeleted = item.dataValue == null || item.dataValue == TOMBSTONE_VALUE
+            val value = item.dataValue
+
+            // ==================== 1. ARAMA GEÇMİŞİ (SEARCH_HISTORY) ====================
+            if (item.dataType == SyncDataType.SEARCH_HISTORY.name) {
+                if (isDeleted || value == "s:[]" || value == "ss:[]" || value == "s:\"\"") {
+                    // Arama geçmişi silindi (Tombstone): Tüm hesap ve varyasyonlardan tamamen sil
+                    rebuildEditor.remove(item.dataKey)
+                    rebuildEditor.remove("search_history")
+                    rebuildEditor.remove("$currentAccount/search_history")
+                    defaultEditor.remove(item.dataKey)
+                    defaultEditor.remove("search_history")
+                    defaultEditor.remove("$currentAccount/search_history")
+                    Log.i(TAG, "Arama geçmişi yerel hafızadan temizlendi (Tombstone)")
+                } else if (value != null) {
+                    // Yeni arama geçmişi geldi: Eski geçmişin üstüne binmemesi için önce temizle, sonra yaz
+                    rebuildEditor.remove("search_history")
+                    rebuildEditor.remove("$currentAccount/search_history")
+                    defaultEditor.remove("search_history")
+                    defaultEditor.remove("$currentAccount/search_history")
+
+                    deserializeAndApply(rebuildEditor, "$currentAccount/search_history", value)
+                    deserializeAndApply(rebuildEditor, "search_history", value)
+                    deserializeAndApply(defaultEditor, "search_history", value)
+                    Log.i(TAG, "Yeni arama geçmişi uygulandı (eski geçmiş temizlendi)")
+                }
+                appliedCount++
+                continue
+            }
+
+            // ==================== 2. UYGULAMA AYARLARI (SETTINGS) ====================
+            if (item.dataType == SyncDataType.SETTINGS.name) {
+                if (isDeleted) {
+                    defaultEditor.remove(item.dataKey)
+                    rebuildEditor.remove(item.dataKey)
+                } else if (value != null) {
+                    // Eğer anahtar rebuildPrefs'te kayıtlıysa veya slash içeriyorsa rebuildEditor'a yaz
+                    if (rebuildPrefs.contains(item.dataKey) || item.dataKey.contains("/")) {
+                        deserializeAndApply(rebuildEditor, item.dataKey, value)
+                    } else {
+                        // Standart uygulama ayarları defaultPrefs'e yazılır
+                        deserializeAndApply(defaultEditor, item.dataKey, value)
+                    }
+                }
+                appliedCount++
+                continue
+            }
+
+            // ==================== 3. DİĞER VERİLER (BOOKMARKS, PROGRESS, REPOS) ====================
+            val isRebuildItem = item.dataKey.contains("/") ||
                     Regex("^[0-9]+/").containsMatchIn(item.dataKey)
 
             val editor = if (isRebuildItem) rebuildEditor else defaultEditor
             val accountMatch = Regex("^([0-9]+)/(.*)").find(item.dataKey)
 
-            val isDeleted = item.dataValue == null || item.dataValue == TOMBSTONE_VALUE
             if (isDeleted) {
                 // SİLME İŞLEMİ (Tombstone):
                 editor.remove(item.dataKey)
@@ -212,7 +291,7 @@ class DataExtractor(private val context: Context) {
                 continue
             }
 
-            val value = item.dataValue ?: continue
+            if (value == null) continue
 
             // Normal veri yazma
             deserializeAndApply(editor, item.dataKey, value)
@@ -247,13 +326,13 @@ class DataExtractor(private val context: Context) {
         defaultPrefs.all?.keys?.forEach { key ->
             if (!isNonTransferable(key) && !SyncConfig.isCloudSyncKey(key)) {
                 val type = SyncDataType.fromKey(key, isRebuildPrefs = false)
-                if (type != null && dataTypes.contains(type)) keys.add(key)
+                if (dataTypes.contains(type)) keys.add(key)
             }
         }
         rebuildPrefs.all?.keys?.forEach { key ->
             if (!isNonTransferable(key) && !SyncConfig.isCloudSyncKey(key)) {
                 val type = SyncDataType.fromKey(key, isRebuildPrefs = true)
-                if (type != null && dataTypes.contains(type)) keys.add(key)
+                if (dataTypes.contains(type)) keys.add(key)
             }
         }
         return keys

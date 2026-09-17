@@ -61,8 +61,7 @@ enum class SyncDataType(val displayName: String, val keyPatterns: List<String>) 
         "Favoriler & Listeler",
         listOf(
             "result_favorites_state_data",
-            "result_watch_state_data",
-            "result_subscribed_state_data",
+            "result_watch_state",
             "bookmark_",
             "favorites_"
         )
@@ -70,16 +69,14 @@ enum class SyncDataType(val displayName: String, val keyPatterns: List<String>) 
     WATCH_PROGRESS(
         "Kaldığın Yerden Devam",
         listOf(
-            "video_pos_dur",
             "result_resume_watching",
-            "video_watch_state",
-            "result_watch_state",
+            "video_pos_dur",
+            "download_header_cache",
             "result_season",
-            "result_episode",
             "result_dub",
+            "result_episode",
             "video_pos_",
-            "resume_",
-            "episode_"
+            "resume_"
         )
     ),
     SEARCH_HISTORY(
@@ -91,20 +88,20 @@ enum class SyncDataType(val displayName: String, val keyPatterns: List<String>) 
     REPOS(
         "Eklentiler & Depolar",
         listOf(
-            "repos_key",
+            "plugins_key",
+            "plugins_repositories",
+            "repositories",
             "user_custom_sites",
-            "repository_"
+            "repos_key"
         )
     ),
     SETTINGS(
         "Uygulama Ayarları",
         listOf(
-            "app_layout_key", "prefer_media_type_key", "color_primary",
-            "theme_key", "quality_pref", "resize_pref", "dns_pref",
-            "subtitle_", "playback_speed", "player_", "provider_",
-            "lang_pref", "auto_", "show_fillers", "prerelease_updates",
-            "poster_ui_key", "ui_settings", "home_api_used",
-            "result_resume_watching_migrated"
+            "app_layout", "theme", "color_primary", "sub", "player", "video",
+            "dns", "lang", "quality", "resize", "speed", "buffer", "gesture",
+            "render", "fit", "aspect", "volume", "brightness", "skip",
+            "home", "poster", "show_", "auto_"
         )
     );
 
@@ -113,46 +110,35 @@ enum class SyncDataType(val displayName: String, val keyPatterns: List<String>) 
 
         /**
          * Verilen SharedPreferences key'inin hangi sync tipine ait olduğunu bulur.
-         * CloudStream verileri "0/result_favorites_state_data/123" gibi hesap önekleriyle saklar.
-         *
-         * @param key SharedPreferences anahtarı
-         * @param isRebuildPrefs Anahtarın rebuild_preference dosyasından gelip gelmediği
+         * Referans eklenti standardı: Bookmarks, Resume, Search, Repos dışındaki tüm
+         * transfer edilebilir ayarlar SETTINGS kategorisine dahil edilir.
          */
-        fun fromKey(key: String, isRebuildPrefs: Boolean = false): SyncDataType? {
+        fun fromKey(key: String, isRebuildPrefs: Boolean = false): SyncDataType {
             val cleanKey = key.replaceFirst(ACCOUNT_PREFIX_REGEX, "")
             val cleanLower = cleanKey.lowercase()
 
-            // 1. Favoriler, Listeler (Planlananlar, İzlenenler vb.)
-            if (BOOKMARKS.keyPatterns.any { cleanLower.startsWith(it) }) {
+            // 1. Favoriler & Listeler
+            if (BOOKMARKS.keyPatterns.any { cleanLower.contains(it) }) {
                 return BOOKMARKS
             }
 
             // 2. Kaldığın Yerden Devam & İzleme Geçmişi
-            if (WATCH_PROGRESS.keyPatterns.any { cleanLower.startsWith(it) }) {
+            if (WATCH_PROGRESS.keyPatterns.any { cleanLower.contains(it) }) {
                 return WATCH_PROGRESS
             }
 
             // 3. Arama Geçmişi
-            if (SEARCH_HISTORY.keyPatterns.any { cleanLower.startsWith(it) }) {
+            if (SEARCH_HISTORY.keyPatterns.any { cleanLower.contains(it) }) {
                 return SEARCH_HISTORY
             }
 
-            // 4. Depolar
-            if (REPOS.keyPatterns.any { cleanLower.startsWith(it) }) {
+            // 4. Depolar & Eklentiler
+            if (REPOS.keyPatterns.any { cleanLower.contains(it) }) {
                 return REPOS
             }
 
-            // 5. Ayarlar
-            if (SETTINGS.keyPatterns.any { cleanLower.startsWith(it) }) {
-                return SETTINGS
-            }
-
-            // 6. Default SharedPreferences'da bulunan ve yukarıdakilere girmeyen ayarlar
-            if (!isRebuildPrefs && !cleanKey.contains("/")) {
-                return SETTINGS
-            }
-
-            return null
+            // 5. Geriye kalan her şey (tema, player, altyazı, görünüm vb.) AYARLARDIR
+            return SETTINGS
         }
     }
 }

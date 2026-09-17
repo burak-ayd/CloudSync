@@ -2,6 +2,7 @@ package com.cloudsync.core
 
 import android.util.Log
 import com.cloudsync.models.SyncDataItem
+import com.cloudsync.models.SyncDataType
 
 /**
  * Çakışma çözümleyici.
@@ -28,8 +29,18 @@ class ConflictResolver {
         remoteItems: List<SyncDataItem>,
         lastSyncTime: Long = 0L
     ): ResolveResult {
-        val localMap = localItems.associateBy { "${it.dataType}:${it.dataKey}" }
-        val remoteMap = remoteItems.associateBy { "${it.dataType}:${it.dataKey}" }
+        // Composite key oluştururken hesap öneklerini temizle (cihazlar arası hesap id uyumsuzluğunu gidermek için)
+        fun makeKey(item: SyncDataItem): String {
+            val normKey = if (item.dataType == SyncDataType.SEARCH_HISTORY.name) {
+                "search_history"
+            } else {
+                item.dataKey
+            }
+            return "${item.dataType}:$normKey"
+        }
+
+        val localMap = localItems.associateBy { makeKey(it) }
+        val remoteMap = remoteItems.associateBy { makeKey(it) }
 
         val toUpload = mutableListOf<SyncDataItem>()   // Local -> Cloud
         val toDownload = mutableListOf<SyncDataItem>()  // Cloud -> Local
@@ -51,6 +62,18 @@ class ConflictResolver {
 
                 // Değerler farklı:
                 val remoteTime = parseTimestamp(remoteItem.updatedAt)
+
+                // SEARCH_HISTORY özel kuralı: Bulutta bir geçmiş varsa veya silinmişse (Tombstone),
+                // yereldeki eski geçmiş buluttakinin üstüne yüklenmez; buluttaki indirilir!
+                if (localItem.dataType == SyncDataType.SEARCH_HISTORY.name) {
+                    if (remoteItem.dataValue == DataExtractor.TOMBSTONE_VALUE || remoteTime >= lastSyncTime) {
+                        toDownload.add(remoteItem)
+                    } else {
+                        toUpload.add(localItem)
+                    }
+                    conflictCount++
+                    continue
+                }
 
                 if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
                     // Buluttaki veri daha yeni (son senkronizasyondan sonra güncellenmiş veya silinmiş) → indir
