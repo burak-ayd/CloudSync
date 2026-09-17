@@ -61,12 +61,18 @@ class CloudSyncPlugin : Plugin() {
 
     override fun load(context: Context) {
         activity = context as? AppCompatActivity
-        syncManager = SyncManager(context)
-        syncScheduler = SyncScheduler(context).also { scheduler ->
-            // Otomatik senkronizasyon aktifse zamanlayıcıyı başlat
-            if (SyncConfig.isAutoSyncEnabled(context)) {
-                scheduler.start(syncManager!!)
-            }
+        val manager = SyncManager(context)
+        val scheduler = SyncScheduler(context)
+
+        // SyncManager ve SyncScheduler'ı birbirine bağla
+        manager.syncScheduler = scheduler
+        syncManager = manager
+        syncScheduler = scheduler
+
+        // Reaktif senkronizasyon mekanizmalarını başlat
+        // (SharedPreferences listener + Activity lifecycle + Periyodik zamanlayıcı)
+        if (SyncConfig.isConfigured(context)) {
+            scheduler.start(manager)
         }
 
         // Uygulama açılışında senkronize et (ayar aktifse)
@@ -100,11 +106,12 @@ class CloudSyncPlugin : Plugin() {
         openSettings = { ctx ->
             (ctx as? AppCompatActivity)?.let { act ->
                 this.activity = act
+                syncScheduler?.currentActivity = act
                 showSyncDialog(act)
             }
         }
 
-        Log.i(TAG, "CloudSync eklentisi yüklendi!")
+        Log.i(TAG, "CloudSync eklentisi yüklendi! (Reaktif sync aktif)")
     }
 
     /**
@@ -336,7 +343,7 @@ class CloudSyncPlugin : Plugin() {
 
             addView(createToggleRow(context, "Otomatik Sync", SyncConfig.isAutoSyncEnabled(context)) { enabled ->
                 SyncConfig.setAutoSync(context, enabled)
-                if (enabled) {
+                if (enabled && SyncConfig.isConfigured(context)) {
                     syncScheduler?.start(syncManager!!)
                 } else {
                     syncScheduler?.stop()

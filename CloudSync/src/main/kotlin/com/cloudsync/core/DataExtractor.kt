@@ -152,8 +152,14 @@ class DataExtractor(private val context: Context) {
 
     /**
      * Buluttan indirilen verileri local SharedPreferences'a yazar veya siler (tombstone).
+     *
+     * @param scheduler Eğer sağlanırsa, yazma sırasında restore guard aktifleştirilir.
+     *                  Bu, SharedPreferences listener'ın bu yazma işlemini
+     *                  "yeni kullanıcı değişikliği" olarak algılamasını engeller.
      */
-    fun applyData(items: List<SyncDataItem>) {
+    fun applyData(items: List<SyncDataItem>, scheduler: SyncScheduler? = null) {
+        // Restore guard'ı aktifleştir (listener feedback loop'u önleme)
+        scheduler?.beginRestore()
         val defaultPrefs = PreferenceManager.getDefaultSharedPreferences(context)
         val rebuildPrefs = context.getSharedPreferences(REBUILD_PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -223,6 +229,9 @@ class DataExtractor(private val context: Context) {
 
         defaultEditor.apply()
         rebuildEditor.apply()
+
+        // Restore guard'ı deaktif et
+        scheduler?.endRestore()
 
         Log.i(TAG, "$appliedCount veri uygulandı/silindi (Hedef aktif hesap: $currentAccount)")
     }

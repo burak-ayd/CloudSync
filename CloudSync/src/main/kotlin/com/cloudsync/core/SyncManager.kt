@@ -28,6 +28,12 @@ class SyncManager(private val context: Context) {
     private var provider: SyncProvider = SupabaseProvider(context)
 
     /**
+     * SyncScheduler referansı. DataExtractor.applyData çağrılırken
+     * restore guard'ı aktifleştirmek için kullanılır.
+     */
+    var syncScheduler: SyncScheduler? = null
+
+    /**
      * Senkronizasyon durumu callback'leri
      */
     interface SyncCallback {
@@ -132,7 +138,7 @@ class SyncManager(private val context: Context) {
                 if (resolved.toDownload.isNotEmpty()) {
                     callback?.onSyncProgress("${resolved.toDownload.size} veri uygulanıyor...")
 
-                    dataExtractor.applyData(resolved.toDownload)
+                    dataExtractor.applyData(resolved.toDownload, syncScheduler)
                     downloadedCount = resolved.toDownload.size
                 }
 
@@ -296,7 +302,7 @@ class SyncManager(private val context: Context) {
                 val items = downloadResult.getOrDefault(emptyList())
 
                 callback?.onSyncProgress("${items.size} veri uygulanıyor...")
-                dataExtractor.applyData(items)
+                dataExtractor.applyData(items, syncScheduler)
 
                 SyncConfig.setLastSyncTime(context, System.currentTimeMillis())
 
