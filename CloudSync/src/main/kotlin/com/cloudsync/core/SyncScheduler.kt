@@ -183,8 +183,9 @@ class SyncScheduler(private val context: Context) {
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == null) return@OnSharedPreferenceChangeListener
 
-            // CloudSync'in kendi key'lerini yok say
+            // CloudSync'in kendi key'lerini ve transfer edilemeyen anahtarları yok say
             if (SyncConfig.isCloudSyncKey(key)) return@OnSharedPreferenceChangeListener
+            if (DataExtractor.isNonTransferable(key)) return@OnSharedPreferenceChangeListener
 
             // Kendi indirdiğimiz veriyi yazarken tetiklenmeyi engelle
             if (isRestoring || System.currentTimeMillis() < restoringUntil) {
@@ -309,7 +310,7 @@ class SyncScheduler(private val context: Context) {
                     if (result?.success == true && result.downloadedCount > 0) {
                         Log.i(TAG, "Resume-pull: ${result.downloadedCount} veri indirildi")
                         withContext(Dispatchers.Main) {
-                            notifyUIUpdate()
+                            notifyUIUpdate(result.updatedTypes)
                         }
                     }
                 }
@@ -398,7 +399,7 @@ class SyncScheduler(private val context: Context) {
                             Log.i(TAG, "Debounced push tamamlandı: ↑$uploadCount ↓$downloadCount")
                             if (downloadCount > 0) {
                                 withContext(Dispatchers.Main) {
-                                    notifyUIUpdate()
+                                    notifyUIUpdate(result.updatedTypes)
                                 }
                             }
                         }
@@ -435,8 +436,10 @@ class SyncScheduler(private val context: Context) {
     /**
      * CloudStream arayüzünü günceller.
      * Favoriler, kütüphane ve ana sayfa yenilenir.
+     * Eğer ayarlar senkronize edildiyse, yeni ayarların/temaların uygulanması için
+     * Activity recreate edilir (referans eklenti standardı).
      */
-    private fun notifyUIUpdate() {
+    private fun notifyUIUpdate(updatedTypes: List<SyncDataType> = emptyList()) {
         try {
             com.lagradost.cloudstream3.MainActivity.bookmarksUpdatedEvent.invoke(true)
         } catch (_: Throwable) {}
@@ -446,6 +449,20 @@ class SyncScheduler(private val context: Context) {
         try {
             com.lagradost.cloudstream3.MainActivity.reloadHomeEvent.invoke(true)
         } catch (_: Throwable) {}
+
+        // Ayarlar değiştiğinde UI'ın anında yeni temayı/ayarları görmesi için Activity recreate edilir
+        if (updatedTypes.contains(SyncDataType.SETTINGS)) {
+            try {
+                currentActivity?.let { act ->
+                    if (act.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                        Log.i(TAG, "Ayarlar güncellendi -> Activity yeniden yükleniyor (recreate)")
+                        act.recreate()
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "Activity recreate hatası: ${e.message}")
+            }
+        }
     }
 
     // ==================== Key Sınıflandırma ====================

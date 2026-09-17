@@ -34,12 +34,7 @@ class ConflictResolver {
     ): ResolveResult {
         // Composite key oluştururken hesap öneklerini temizle (cihazlar arası hesap id uyumsuzluğunu gidermek için)
         fun makeKey(item: SyncDataItem): String {
-            val normKey = if (item.dataType == SyncDataType.SEARCH_HISTORY.name) {
-                "search_history"
-            } else {
-                item.dataKey
-            }
-            return "${item.dataType}:$normKey"
+            return "${item.dataType}:${item.dataKey}"
         }
 
         val localMap = localItems.associateBy { makeKey(it) }
@@ -56,11 +51,9 @@ class ConflictResolver {
             val isLocallyDirty = dataType != null && dirtyTypes.contains(dataType)
 
             if (remoteItem == null) {
-                // Local'da silinmiş (tombstone) ve bulutta da zaten yoksa yüklemeye gerek yok
-                if (localItem.dataValue != DataExtractor.TOMBSTONE_VALUE) {
-                    // SETTINGS için: Eğer bu cihazda kullanıcı ayarı değiştirmemişse ve ilk kurulum değilse
-                    // cihazın varsayılan yüzlerce ayarını buluta basıp diğer cihazları bozmasını engelle
-                    if (dataType == SyncDataType.SETTINGS) {
+                // Local'da silinmiş veya boş bundle ise ve bulutta da yoksa yüklemeye gerek yok
+                if (localItem.dataValue != DataExtractor.TOMBSTONE_VALUE && localItem.dataValue != DataExtractor.EMPTY_BUNDLE_VALUE) {
+                    if (dataType == SyncDataType.SETTINGS || dataType == SyncDataType.SEARCH_HISTORY) {
                         if (isLocallyDirty || lastSyncTime == 0L) {
                             toUpload.add(localItem)
                         }
@@ -74,26 +67,10 @@ class ConflictResolver {
                     continue
                 }
 
-                // Değerler farklı:
-                val remoteTime = parseTimestamp(remoteItem.updatedAt)
-
-                // 1. SEARCH_HISTORY:
-                if (localItem.dataType == SyncDataType.SEARCH_HISTORY.name) {
+                // 1. SETTINGS (Uygulama Ayarları Demeti):
+                if (dataType == SyncDataType.SETTINGS) {
                     if (isLocallyDirty) {
-                        // Bu cihazda kullanıcı arama yaptı veya geçmişi sildi
-                        toUpload.add(localItem)
-                    } else {
-                        // Bu cihazda yeni arama yapılmadı, buluttaki güncel geçmiş geçerlidir
-                        toDownload.add(remoteItem)
-                    }
-                    conflictCount++
-                    continue
-                }
-
-                // 2. SETTINGS (Uygulama Ayarları):
-                if (localItem.dataType == SyncDataType.SETTINGS.name) {
-                    if (isLocallyDirty) {
-                        // Kullanıcı bu cihazda bu ayarı bizzat değiştirdi -> Yükle
+                        // Kullanıcı bu cihazda ayar değiştirdi -> Yükle
                         toUpload.add(localItem)
                     } else {
                         // Bu cihaz sadece açıldı veya bu ayara dokunulmadı -> Buluttaki ayarı uygula
@@ -103,7 +80,21 @@ class ConflictResolver {
                     continue
                 }
 
+                // 2. SEARCH_HISTORY (Arama Geçmişi Demeti):
+                if (dataType == SyncDataType.SEARCH_HISTORY) {
+                    if (isLocallyDirty) {
+                        // Kullanıcı bu cihazda arama yaptı veya geçmişi sildi -> Yükle
+                        toUpload.add(localItem)
+                    } else {
+                        // Bu cihazda yeni arama yapılmadı -> Buluttaki geçmişi uygula
+                        toDownload.add(remoteItem)
+                    }
+                    conflictCount++
+                    continue
+                }
+
                 // 3. BOOKMARKS, WATCH_PROGRESS, REPOS ve diğerleri:
+                val remoteTime = parseTimestamp(remoteItem.updatedAt)
                 if (isLocallyDirty) {
                     toUpload.add(localItem)
                 } else if (lastSyncTime == 0L || remoteTime > lastSyncTime) {

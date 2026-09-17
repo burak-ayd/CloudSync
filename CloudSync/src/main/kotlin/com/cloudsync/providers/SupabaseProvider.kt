@@ -151,6 +151,7 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
 
             queryParts.add("select=*")
             queryParts.add("order=updated_at.desc")
+            queryParts.add("limit=5000")
 
             val url = buildUrl(TABLE_SYNC_DATA, queryParts.joinToString("&"))
 

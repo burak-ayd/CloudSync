@@ -41,6 +41,16 @@ data class SyncLogEntry(
 )
 
 /**
+ * SharedPreferences demeti.
+ * Hem "rebuild_preference" (içerik/DataStore) hem de "default_preference" (ayarlar)
+ * anahtarlarını kaynak dosya ayrımı bozulmadan tek bir JSON gövdesinde saklar.
+ */
+data class PrefsBundle(
+    @get:JsonProperty("rebuild") @param:JsonProperty("rebuild") val rebuild: Map<String, String> = emptyMap(),
+    @get:JsonProperty("default") @param:JsonProperty("default") val default: Map<String, String> = emptyMap()
+)
+
+/**
  * Supabase API yanıt modeli
  */
 data class SupabaseResponse(
