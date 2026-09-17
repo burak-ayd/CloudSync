@@ -65,6 +65,7 @@ class CloudSyncPlugin : Plugin() {
         val scheduler = SyncScheduler(context)
 
         // SyncManager ve SyncScheduler'ı birbirine bağla
+        scheduler.currentActivity = activity
         manager.syncScheduler = scheduler
         syncManager = manager
         syncScheduler = scheduler
@@ -80,13 +81,15 @@ class CloudSyncPlugin : Plugin() {
             scope.launch(Dispatchers.IO) {
                 try {
                     Log.i(TAG, "Açılışta otomatik senkronizasyon başlatılıyor...")
-                    val result = syncManager?.syncAll()
+                    val result = syncManager?.syncAll(dirtyTypes = emptySet())
                     if (result?.success == true && (result.downloadedCount > 0 || result.uploadedCount > 0)) {
                         val types = result.updatedTypes.map { it.displayName }.distinct()
                         val typeText = if (types.isNotEmpty()) types.joinToString(", ") else "Veriler"
                         Log.i(TAG, "Açılış sync: $typeText güncellendi (↓${result.downloadedCount} ↑${result.uploadedCount})")
                         if (result.downloadedCount > 0) {
-                            notifyUIUpdate()
+                            withContext(Dispatchers.Main) {
+                                notifyUIUpdate(result.updatedTypes)
+                            }
                         }
                         withContext(Dispatchers.Main) {
                             Toast.makeText(
@@ -117,7 +120,7 @@ class CloudSyncPlugin : Plugin() {
     /**
      * CloudStream arayüzünü güncellenen verilerle yenilemek için dahili event'leri tetikler.
      */
-    private fun notifyUIUpdate() {
+    private fun notifyUIUpdate(updatedTypes: List<SyncDataType> = emptyList()) {
         try {
             com.lagradost.cloudstream3.MainActivity.bookmarksUpdatedEvent.invoke(true)
         } catch (_: Throwable) {}
@@ -127,6 +130,22 @@ class CloudSyncPlugin : Plugin() {
         try {
             com.lagradost.cloudstream3.MainActivity.reloadLibraryEvent.invoke(true)
         } catch (_: Throwable) {}
+
+        if (updatedTypes.contains(SyncDataType.SETTINGS) || updatedTypes.contains(SyncDataType.SEARCH_HISTORY)) {
+            val act = this.activity ?: syncScheduler?.currentActivity
+            act?.let { a ->
+                a.runOnUiThread {
+                    try {
+                        if (a.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                            Log.i(TAG, "Ayarlar veya arama geçmişi güncellendi -> Activity recreate ediliyor")
+                            a.recreate()
+                        }
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "Activity recreate hatası: ${e.message}")
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -704,7 +723,7 @@ class CloudSyncPlugin : Plugin() {
                             currentSettingsDialog = null
                         } catch (_: Exception) {}
 
-                        notifyUIUpdate()
+                        notifyUIUpdate(result.updatedTypes)
 
                         AlertDialog.Builder(activity)
                             .setTitle("✅ Senkronizasyon Tamamlandı")

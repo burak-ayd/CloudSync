@@ -38,7 +38,9 @@ class ConflictResolver {
         }
 
         val localMap = localItems.associateBy { makeKey(it) }
-        val remoteMap = remoteItems.associateBy { makeKey(it) }
+        // Supabase'den gelen liste updated_at.desc sırasındadır (en yeni en başta).
+        // associateBy duplicate key durumunda sonuncuyu (en eskiyi) almasın diye distinctBy ile en yeniyi koruyoruz:
+        val remoteMap = remoteItems.distinctBy { makeKey(it) }.associateBy { makeKey(it) }
 
         val toUpload = mutableListOf<SyncDataItem>()   // Local -> Cloud
         val toDownload = mutableListOf<SyncDataItem>()  // Cloud -> Local
@@ -67,14 +69,20 @@ class ConflictResolver {
                     continue
                 }
 
+                val remoteTime = parseTimestamp(remoteItem.updatedAt)
+
                 // 1. SETTINGS (Uygulama Ayarları Demeti):
                 if (dataType == SyncDataType.SETTINGS) {
-                    if (isLocallyDirty) {
-                        // Kullanıcı bu cihazda ayar değiştirdi -> Yükle
+                    // Buluttaki ayarlar son başarılı senkronizasyondan daha yeniyse (veya ilk senkronizasyonsa) KESİNLİKLE İNDİR!
+                    if (remoteTime > lastSyncTime || lastSyncTime == 0L) {
+                        Log.i(TAG, "Bulut ayarları daha yeni (remoteTime=$remoteTime > lastSync=$lastSyncTime) -> İndiriliyor")
+                        toDownload.add(remoteItem)
+                    } else if (isLocallyDirty) {
+                        // Kullanıcı buluttaki son güncellemeden sonra bu cihazda ayar değiştirdi -> Yükle
+                        Log.i(TAG, "Yerel ayarlar değişti (isLocallyDirty) -> Yükleniyor")
                         toUpload.add(localItem)
                     } else {
-                        // Bu cihaz sadece açıldı veya bu ayara dokunulmadı -> Buluttaki ayarı uygula
-                        toDownload.add(remoteItem)
+                        Log.i(TAG, "Ayarlar güncel, işlem yapılmadı")
                     }
                     conflictCount++
                     continue
@@ -82,19 +90,22 @@ class ConflictResolver {
 
                 // 2. SEARCH_HISTORY (Arama Geçmişi Demeti):
                 if (dataType == SyncDataType.SEARCH_HISTORY) {
-                    if (isLocallyDirty) {
-                        // Kullanıcı bu cihazda arama yaptı veya geçmişi sildi -> Yükle
+                    // Buluttaki arama geçmişi son senkronizasyondan daha yeniyse (veya ilk senkronizasyonsa) KESİNLİKLE İNDİR!
+                    if (remoteTime > lastSyncTime || lastSyncTime == 0L) {
+                        Log.i(TAG, "Bulut arama geçmişi daha yeni (remoteTime=$remoteTime > lastSync=$lastSyncTime) -> İndiriliyor")
+                        toDownload.add(remoteItem)
+                    } else if (isLocallyDirty) {
+                        // Kullanıcı buluttaki son güncellemeden sonra bu cihazda arama yaptı/sildi -> Yükle
+                        Log.i(TAG, "Yerel arama geçmişi değişti (isLocallyDirty) -> Yükleniyor")
                         toUpload.add(localItem)
                     } else {
-                        // Bu cihazda yeni arama yapılmadı -> Buluttaki geçmişi uygula
-                        toDownload.add(remoteItem)
+                        Log.i(TAG, "Arama geçmişi güncel, işlem yapılmadı")
                     }
                     conflictCount++
                     continue
                 }
 
                 // 3. BOOKMARKS, WATCH_PROGRESS, REPOS ve diğerleri:
-                val remoteTime = parseTimestamp(remoteItem.updatedAt)
                 if (isLocallyDirty) {
                     toUpload.add(localItem)
                 } else if (lastSyncTime == 0L || remoteTime > lastSyncTime) {

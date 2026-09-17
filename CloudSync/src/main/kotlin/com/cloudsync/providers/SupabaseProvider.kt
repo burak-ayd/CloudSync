@@ -175,8 +175,12 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
                 object : TypeReference<List<SyncDataItem>>() {}
             )
 
-            Log.i(TAG, "${items.size} veri indirildi")
-            Result.success(items)
+            // Supabase sorgusu order=updated_at.desc olduğundan en yeni öğeler en baştadır.
+            // distinctBy ile duplicate satırlar elenir ve her zaman en yeni öğe korunur.
+            val distinctItems = items.distinctBy { "${it.dataType}:${it.dataKey}" }
+
+            Log.i(TAG, "${distinctItems.size} veri indirildi (ham: ${items.size})")
+            Result.success(distinctItems)
         } catch (e: Exception) {
             Log.e(TAG, "Veri indirme hatası", e)
             Result.failure(e)

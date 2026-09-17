@@ -86,6 +86,10 @@ class SyncScheduler(private val context: Context) {
     /** Activity referansı (notifyUIUpdate ve lifecycle için) */
     var currentActivity: AppCompatActivity? = null
 
+    /** Uygulama açılış koruma süresi (açılışta CloudStream'in yazdığı dahili ayarların bulutu ezmesini engeller) */
+    private val startupTime = System.currentTimeMillis()
+    private val STARTUP_GRACE_PERIOD_MS = 10_000L
+
     // ==================== Periyodik Zamanlayıcı (Eski davranış) ====================
 
     private val periodicSyncRunnable = object : Runnable {
@@ -197,6 +201,14 @@ class SyncScheduler(private val context: Context) {
 
             // Key'in hangi veri tipine ait olduğunu belirle
             val dataType = classifyKey(key)
+
+            // Uygulama açılışında ilk 10 saniye boyunca CloudStream'in kendi yazdığı dahili ayarların
+            // ayarları "kirli" (dirty) olarak işaretleyip bulutu ezmesini engelle
+            if (dataType == SyncDataType.SETTINGS && System.currentTimeMillis() - startupTime < STARTUP_GRACE_PERIOD_MS) {
+                Log.d(TAG, "Açılış koruma süresinde pref değişimi yok sayıldı: $key")
+                return@OnSharedPreferenceChangeListener
+            }
+
             if (SyncConfig.isSyncEnabled(context, dataType)) {
                 Log.d(TAG, "Pref değişikliği algılandı: $key → ${dataType.displayName}")
                 markDirty(dataType)
@@ -439,7 +451,7 @@ class SyncScheduler(private val context: Context) {
      * Eğer ayarlar senkronize edildiyse, yeni ayarların/temaların uygulanması için
      * Activity recreate edilir (referans eklenti standardı).
      */
-    private fun notifyUIUpdate(updatedTypes: List<SyncDataType> = emptyList()) {
+    fun notifyUIUpdate(updatedTypes: List<SyncDataType> = emptyList()) {
         try {
             com.lagradost.cloudstream3.MainActivity.bookmarksUpdatedEvent.invoke(true)
         } catch (_: Throwable) {}
@@ -454,9 +466,15 @@ class SyncScheduler(private val context: Context) {
         if (updatedTypes.contains(SyncDataType.SETTINGS) || updatedTypes.contains(SyncDataType.SEARCH_HISTORY)) {
             try {
                 currentActivity?.let { act ->
-                    if (act.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
-                        Log.i(TAG, "Ayarlar veya arama geçmişi güncellendi -> Activity yeniden yükleniyor (recreate)")
-                        act.recreate()
+                    act.runOnUiThread {
+                        try {
+                            if (act.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                                Log.i(TAG, "Ayarlar veya arama geçmişi güncellendi -> Activity yeniden yükleniyor (recreate)")
+                                act.recreate()
+                            }
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "Activity recreate hatası: ${e.message}")
+                        }
                     }
                 }
             } catch (e: Throwable) {
