@@ -3,6 +3,6 @@
 	"description": "Cloud sync plugin for CloudStream",
 	"manifestVersion": 1,
 	"pluginLists": [
-		"https://raw.githubusercontent.com/burak-ayd/CloudSync/master/plugins.json"
+		"https://raw.githubusercontent.com/burak-ayd/CloudSync/new-sync/plugins.json"
 	]
 }
