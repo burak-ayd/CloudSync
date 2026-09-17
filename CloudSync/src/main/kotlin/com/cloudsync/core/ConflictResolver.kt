@@ -4,14 +4,20 @@ import android.util.Log
 import com.cloudsync.models.SyncDataItem
 import com.cloudsync.models.SyncDataType
 
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.cloudsync.models.PrefsBundle
+
 /**
  * Çakışma çözümleyici.
  * "Son yazan kazanır" (Last-Write-Wins) stratejisi kullanır.
  *
  * Aynı key için hem local hem remote'da farklı değerler varsa,
  * timestamp'i daha yeni olan tercih edilir.
+ * Demet (bundle) veriler (Ayarlar ve Arama Geçmişi) için JSON bazlı birleştirme (merge) yapılır.
  */
 class ConflictResolver {
+
+    private val objectMapper = ObjectMapper()
 
     companion object {
         private const val TAG = "CloudSync.ConflictResolver"
@@ -71,27 +77,35 @@ class ConflictResolver {
 
                 val remoteTime = parseTimestamp(remoteItem.updatedAt)
 
-                // 1. SETTINGS (Uygulama Ayarları Demeti):
-                if (dataType == SyncDataType.SETTINGS) {
-                    if (isLocallyDirty) {
-                        Log.i(TAG, "Yerel ayarlar bu cihazda değiştirildi (isLocallyDirty=true) -> Yükleniyor")
+                // 1. SETTINGS ve SEARCH_HISTORY (Demetler / Bundles):
+                if (dataType == SyncDataType.SETTINGS || dataType == SyncDataType.SEARCH_HISTORY) {
+                    // Kullanıcı yerelde bilerek temizlediyse
+                    if (localItem.dataValue == DataExtractor.EMPTY_BUNDLE_VALUE && isLocallyDirty) {
                         toUpload.add(localItem)
-                    } else {
-                        Log.i(TAG, "Buluttaki ayarlar yerelden farklı ve yerel kirli değil -> İndiriliyor")
-                        toDownload.add(remoteItem)
+                        conflictCount++
+                        continue
                     }
-                    conflictCount++
-                    continue
-                }
+                    // Bulutta temizlendiyse
+                    if (remoteItem.dataValue == DataExtractor.EMPTY_BUNDLE_VALUE) {
+                        if (isLocallyDirty) {
+                            toUpload.add(localItem)
+                        } else {
+                            toDownload.add(remoteItem)
+                        }
+                        conflictCount++
+                        continue
+                    }
 
-                // 2. SEARCH_HISTORY (Arama Geçmişi Demeti):
-                if (dataType == SyncDataType.SEARCH_HISTORY) {
-                    if (isLocallyDirty) {
-                        Log.i(TAG, "Yerel arama geçmişi bu cihazda değiştirildi (isLocallyDirty=true) -> Yükleniyor")
-                        toUpload.add(localItem)
-                    } else {
-                        Log.i(TAG, "Buluttaki arama geçmişi yerelden farklı ve yerel kirli değil -> İndiriliyor")
-                        toDownload.add(remoteItem)
+                    // Her ikisinde de veri varsa -> BİRLEŞTİR (MERGE)
+                    val mergedValue = mergeBundles(localItem.dataValue, remoteItem.dataValue)
+
+                    if (mergedValue != localItem.dataValue) {
+                        Log.i(TAG, "Buluttan gelen demet verileri ile yerel veriler birleştirildi -> İndiriliyor")
+                        toDownload.add(remoteItem.copy(dataValue = mergedValue))
+                    }
+                    if (mergedValue != remoteItem.dataValue || isLocallyDirty) {
+                        Log.i(TAG, "Yerel değişiklikler ile bulut verileri birleştirildi -> Yükleniyor")
+                        toUpload.add(localItem.copy(dataValue = mergedValue))
                     }
                     conflictCount++
                     continue
@@ -157,6 +171,32 @@ class ConflictResolver {
         } catch (e: Exception) {
             Log.w(TAG, "Timestamp parse hatası: $timestamp", e)
             0L
+        }
+    }
+
+    /**
+     * İki JSON demetini birleştirir (merge).
+     * Aynı anahtarlar varsa localValue (kullanıcı cihazındaki) değeri kazanır, çünkü
+     * genellikle local daha günceldir (veya değişiklik buradadır).
+     */
+    private fun mergeBundles(localValue: String?, remoteValue: String?): String {
+        if (localValue.isNullOrBlank() || localValue == DataExtractor.EMPTY_BUNDLE_VALUE) return remoteValue ?: ""
+        if (remoteValue.isNullOrBlank() || remoteValue == DataExtractor.EMPTY_BUNDLE_VALUE) return localValue
+        
+        return try {
+            val localBundle = objectMapper.readValue(localValue, PrefsBundle::class.java)
+            val remoteBundle = objectMapper.readValue(remoteValue, PrefsBundle::class.java)
+            
+            val mergedRebuild = remoteBundle.rebuild.toMutableMap()
+            mergedRebuild.putAll(localBundle.rebuild)
+            
+            val mergedDefault = remoteBundle.default.toMutableMap()
+            mergedDefault.putAll(localBundle.default)
+            
+            objectMapper.writeValueAsString(PrefsBundle(mergedRebuild, mergedDefault))
+        } catch (e: Exception) {
+            Log.e(TAG, "Demetler birleştirilirken hata: ${e.message}")
+            localValue
         }
     }
 
