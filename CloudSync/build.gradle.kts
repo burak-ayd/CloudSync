@@ -3,7 +3,7 @@ dependencies {
 }
 
 // Use an integer for version numbers
-version = 11
+version = 12
 
 cloudstream {
     description = "Open-source multi-device sync plugin for CloudStream. Sync bookmarks, watch progress, search history, repos, and settings across all your devices via Supabase."

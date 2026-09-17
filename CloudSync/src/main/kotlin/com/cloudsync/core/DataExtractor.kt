@@ -135,31 +135,73 @@ class DataExtractor(private val context: Context) {
         // ==================== 2. ARAMA GEÇMİŞİ (SEARCH_HISTORY BUNDLE) ====================
         if (dataTypes.contains(SyncDataType.SEARCH_HISTORY)) {
             val rebuildSearch = mutableMapOf<String, String>()
-            val defaultSearch = mutableMapOf<String, String>()
+
+            fun processSearchEntry(rawKey: String, rawValue: Any?) {
+                val s = serializeValue(rawValue) ?: return
+                if (s == "s:[]" || s == "ss:[]" || s == "s:\"\"" || s == "s:{}") return
+
+                val cleanJson = if (s.startsWith("s:")) s.substring(2)
+                else if (s.startsWith("ss:")) s.substring(3)
+                else s
+
+                if (cleanJson.isBlank() || cleanJson == "[]" || cleanJson == "{}" || cleanJson == "\"\"") return
+
+                // 1) Eğer JSON array ise [ {...}, {...} ]
+                if (cleanJson.trimStart().startsWith("[")) {
+                    try {
+                        val jsonTree = objectMapper.readTree(cleanJson)
+                        if (jsonTree.isArray) {
+                            for (elem in jsonTree) {
+                                val itemKey = elem.get("key")?.asText()
+                                    ?: elem.get("searchText")?.asText()?.hashCode()?.toString()
+                                if (!itemKey.isNullOrBlank()) {
+                                    rebuildSearch["0/search_history/$itemKey"] = "s:${elem.toString()}"
+                                }
+                            }
+                            return
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                // 2) Eğer JSON object ise
+                if (cleanJson.trimStart().startsWith("{")) {
+                    try {
+                        val jsonNode = objectMapper.readTree(cleanJson)
+                        val itemKey = jsonNode.get("key")?.asText()
+                            ?: jsonNode.get("searchText")?.asText()?.hashCode()?.toString()
+                        if (!itemKey.isNullOrBlank()) {
+                            rebuildSearch["0/search_history/$itemKey"] = "s:${jsonNode.toString()}"
+                            return
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                // 3) Eğer rawKey "search_history/" içeriyorsa
+                if (rawKey.contains("search_history/")) {
+                    val subKey = rawKey.substringAfter("search_history/").trim('/')
+                    if (subKey.isNotEmpty()) {
+                        rebuildSearch["0/search_history/$subKey"] = s
+                    }
+                }
+            }
 
             for ((key, value) in dataPrefs.all.orEmpty()) {
                 if (key.contains("search_history", ignoreCase = true) && !isNonTransferable(key)) {
-                    val s = serializeValue(value)
-                    if (s != null && s != "s:[]" && s != "ss:[]" && s != "s:\"\"" && s != "s:{}") {
-                        rebuildSearch[key] = s
-                    }
+                    processSearchEntry(key, value)
                 }
             }
 
             for ((key, value) in defaultPrefs.all.orEmpty()) {
                 if (key.contains("search_history", ignoreCase = true) && !isNonTransferable(key)) {
-                    val s = serializeValue(value)
-                    if (s != null && s != "s:[]" && s != "ss:[]" && s != "s:\"\"" && s != "s:{}") {
-                        defaultSearch[key] = s
-                    }
+                    processSearchEntry(key, value)
                 }
             }
 
-            val isSearchEmpty = rebuildSearch.isEmpty() && defaultSearch.isEmpty()
+            val isSearchEmpty = rebuildSearch.isEmpty()
             val searchBundleValue = if (isSearchEmpty) {
                 EMPTY_BUNDLE_VALUE
             } else {
-                objectMapper.writeValueAsString(PrefsBundle(rebuild = rebuildSearch, default = defaultSearch))
+                objectMapper.writeValueAsString(PrefsBundle(rebuild = rebuildSearch, default = emptyMap()))
             }
 
             items.add(
@@ -172,7 +214,7 @@ class DataExtractor(private val context: Context) {
                     updatedAt = null
                 )
             )
-            Log.i(TAG, "Arama geçmişi demeti oluşturuldu: ${if (isSearchEmpty) "TEMİZ / BOŞ" else "${rebuildSearch.size + defaultSearch.size} kayıt"}")
+            Log.i(TAG, "Arama geçmişi demeti oluşturuldu: ${if (isSearchEmpty) "TEMİZ / BOŞ" else "${rebuildSearch.size} kayıt"}")
         }
 
         // ==================== 3. ÖĞE BAZLI VERİLER (BOOKMARKS, PROGRESS, REPOS) ====================
@@ -325,24 +367,72 @@ class DataExtractor(private val context: Context) {
                 if (isTombstone || value.isNullOrBlank() || value == EMPTY_BUNDLE_VALUE || value == "s:[]" || value == "ss:[]") {
                     Log.i(TAG, "Arama geçmişi bulut tarafından temizlendi")
                 } else {
+                    fun applySearchItem(rawKey: String, rawVal: String) {
+                        val cleanJson = if (rawVal.startsWith("s:")) rawVal.substring(2)
+                        else if (rawVal.startsWith("ss:")) rawVal.substring(3)
+                        else rawVal
+
+                        if (cleanJson.isBlank() || cleanJson == "[]" || cleanJson == "{}" || cleanJson == "\"\"") return
+
+                        // 1) Eğer JSON Array ise: [ {...}, {...} ]
+                        if (cleanJson.trimStart().startsWith("[")) {
+                            try {
+                                val jsonTree = objectMapper.readTree(cleanJson)
+                                if (jsonTree.isArray) {
+                                    for (elem in jsonTree) {
+                                        val itemKey = elem.get("key")?.asText()
+                                            ?: elem.get("searchText")?.asText()?.hashCode()?.toString()
+                                            ?: System.currentTimeMillis().toString()
+                                        val itemJson = elem.toString()
+                                        rebuildEditor.putString("$currentAccount/search_history/$itemKey", itemJson)
+                                        rebuildEditor.putString("0/search_history/$itemKey", itemJson)
+                                    }
+                                    return
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Search history array parse error: ${e.message}")
+                            }
+                        }
+
+                        // 2) Eğer tek bir SearchHistoryItem JSON nesnesi ise: { "searchedAt": ..., "searchText": ..., "key": ... }
+                        if (cleanJson.trimStart().startsWith("{")) {
+                            try {
+                                val jsonNode = objectMapper.readTree(cleanJson)
+                                val itemKey = jsonNode.get("key")?.asText()
+                                    ?: jsonNode.get("searchText")?.asText()?.hashCode()?.toString()
+                                    ?: rawKey.substringAfterLast('/').takeIf { it.isNotBlank() && it != "search_history" }
+                                    ?: System.currentTimeMillis().toString()
+                                val itemJson = jsonNode.toString()
+                                rebuildEditor.putString("$currentAccount/search_history/$itemKey", itemJson)
+                                rebuildEditor.putString("0/search_history/$itemKey", itemJson)
+                                return
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Search history object parse error: ${e.message}")
+                            }
+                        }
+
+                        // 3) Eğer rawKey zaten "search_history/$subKey" formatındaysa
+                        if (rawKey.contains("search_history/")) {
+                            val subKey = rawKey.substringAfter("search_history/").trim('/')
+                            if (subKey.isNotEmpty()) {
+                                rebuildEditor.putString("$currentAccount/search_history/$subKey", cleanJson)
+                                rebuildEditor.putString("0/search_history/$subKey", cleanJson)
+                            }
+                        }
+                    }
+
                     try {
                         val bundle = objectMapper.readValue(value, PrefsBundle::class.java)
                         bundle.rebuild.forEach { (k, v) ->
-                            deserializeAndApply(rebuildEditor, k, v)
-                            val baseKey = k.substringAfter('/')
-                            deserializeAndApply(rebuildEditor, "$currentAccount/$baseKey", v)
-                            deserializeAndApply(rebuildEditor, "search_history", v)
+                            applySearchItem(k, v)
                         }
                         bundle.default.forEach { (k, v) ->
-                            deserializeAndApply(defaultEditor, k, v)
-                            deserializeAndApply(defaultEditor, "search_history", v)
+                            applySearchItem(k, v)
                         }
-                        Log.i(TAG, "Yeni arama geçmişi uygulandı (${bundle.rebuild.size + bundle.default.size} kayıt)")
+                        Log.i(TAG, "Yeni arama geçmişi uygulandı (${bundle.rebuild.size + bundle.default.size} kayıt işlendi)")
                     } catch (e: Exception) {
                         // Geriye dönük uyumluluk (düz JSON/string ise)
-                        deserializeAndApply(rebuildEditor, "$currentAccount/search_history", value)
-                        deserializeAndApply(rebuildEditor, "search_history", value)
-                        deserializeAndApply(defaultEditor, "search_history", value)
+                        applySearchItem("search_history", value)
                     }
                 }
                 appliedCount++
@@ -390,8 +480,8 @@ class DataExtractor(private val context: Context) {
             }
         }
 
-        defaultEditor.apply()
-        rebuildEditor.apply()
+        defaultEditor.commit()
+        rebuildEditor.commit()
 
         scheduler?.endRestore()
         Log.i(TAG, "$appliedCount veri uygulandı/silindi (Hedef aktif profil: $currentAccount)")

@@ -450,12 +450,12 @@ class SyncScheduler(private val context: Context) {
             com.lagradost.cloudstream3.MainActivity.reloadHomeEvent.invoke(true)
         } catch (_: Throwable) {}
 
-        // Ayarlar değiştiğinde UI'ın anında yeni temayı/ayarları görmesi için Activity recreate edilir
-        if (updatedTypes.contains(SyncDataType.SETTINGS)) {
+        // Ayarlar veya arama geçmişi değiştiğinde UI'ın anında yeni verileri görmesi için Activity recreate edilir
+        if (updatedTypes.contains(SyncDataType.SETTINGS) || updatedTypes.contains(SyncDataType.SEARCH_HISTORY)) {
             try {
                 currentActivity?.let { act ->
                     if (act.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
-                        Log.i(TAG, "Ayarlar güncellendi -> Activity yeniden yükleniyor (recreate)")
+                        Log.i(TAG, "Ayarlar veya arama geçmişi güncellendi -> Activity yeniden yükleniyor (recreate)")
                         act.recreate()
                     }
                 }
