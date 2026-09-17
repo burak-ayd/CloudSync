@@ -305,7 +305,7 @@ class SyncScheduler(private val context: Context) {
         scope.launch {
             try {
                 syncMutex.withLock {
-                    val result = syncManager?.syncAll()
+                    val result = syncManager?.syncAll(dirtyTypes = emptySet())
                     if (result?.success == true && result.downloadedCount > 0) {
                         Log.i(TAG, "Resume-pull: ${result.downloadedCount} veri indirildi")
                         withContext(Dispatchers.Main) {
@@ -388,7 +388,7 @@ class SyncScheduler(private val context: Context) {
             try {
                 syncMutex.withLock {
                     lastPushTimestamp = System.currentTimeMillis()
-                    val result = syncManager?.syncAll()
+                    val result = syncManager?.syncAll(dirtyTypes = types)
                     lastPushTimestamp = System.currentTimeMillis()
 
                     if (result?.success == true) {

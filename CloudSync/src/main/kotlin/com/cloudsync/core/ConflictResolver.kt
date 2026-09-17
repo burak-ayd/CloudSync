@@ -22,12 +22,15 @@ class ConflictResolver {
      *
      * @param localItems Cihazdan çıkarılan veriler
      * @param remoteItems Buluttan indirilen veriler
+     * @param lastSyncTime Son başarılı senkronizasyon zamanı
+     * @param dirtyTypes Bu cihazda yerel olarak değişen veri tipleri (listener tarafından yakalanan)
      * @return Birleştirilmiş veri listesi (çakışmalar çözülmüş)
      */
     fun resolve(
         localItems: List<SyncDataItem>,
         remoteItems: List<SyncDataItem>,
-        lastSyncTime: Long = 0L
+        lastSyncTime: Long = 0L,
+        dirtyTypes: Set<SyncDataType> = emptySet()
     ): ResolveResult {
         // Composite key oluştururken hesap öneklerini temizle (cihazlar arası hesap id uyumsuzluğunu gidermek için)
         fun makeKey(item: SyncDataItem): String {
@@ -46,13 +49,24 @@ class ConflictResolver {
         val toDownload = mutableListOf<SyncDataItem>()  // Cloud -> Local
         var conflictCount = 0
 
-        // Local'da olup remote'da olmayanlar → yükle
+        // Local'da olup remote'da olmayanlar
         for ((compositeKey, localItem) in localMap) {
             val remoteItem = remoteMap[compositeKey]
+            val dataType = try { SyncDataType.valueOf(localItem.dataType) } catch (_: Exception) { null }
+            val isLocallyDirty = dataType != null && dirtyTypes.contains(dataType)
+
             if (remoteItem == null) {
                 // Local'da silinmiş (tombstone) ve bulutta da zaten yoksa yüklemeye gerek yok
                 if (localItem.dataValue != DataExtractor.TOMBSTONE_VALUE) {
-                    toUpload.add(localItem)
+                    // SETTINGS için: Eğer bu cihazda kullanıcı ayarı değiştirmemişse ve ilk kurulum değilse
+                    // cihazın varsayılan yüzlerce ayarını buluta basıp diğer cihazları bozmasını engelle
+                    if (dataType == SyncDataType.SETTINGS) {
+                        if (isLocallyDirty || lastSyncTime == 0L) {
+                            toUpload.add(localItem)
+                        }
+                    } else {
+                        toUpload.add(localItem)
+                    }
                 }
             } else {
                 // Değerler tamamen aynıysa işlem yapmaya gerek yok
@@ -63,27 +77,43 @@ class ConflictResolver {
                 // Değerler farklı:
                 val remoteTime = parseTimestamp(remoteItem.updatedAt)
 
-                // SEARCH_HISTORY özel kuralı: Bulutta bir geçmiş varsa veya silinmişse (Tombstone),
-                // yereldeki eski geçmiş buluttakinin üstüne yüklenmez; buluttaki indirilir!
+                // 1. SEARCH_HISTORY:
                 if (localItem.dataType == SyncDataType.SEARCH_HISTORY.name) {
-                    if (remoteItem.dataValue == DataExtractor.TOMBSTONE_VALUE || remoteTime >= lastSyncTime) {
-                        toDownload.add(remoteItem)
-                    } else {
+                    if (isLocallyDirty) {
+                        // Bu cihazda kullanıcı arama yaptı veya geçmişi sildi
                         toUpload.add(localItem)
+                    } else {
+                        // Bu cihazda yeni arama yapılmadı, buluttaki güncel geçmiş geçerlidir
+                        toDownload.add(remoteItem)
                     }
                     conflictCount++
                     continue
                 }
 
-                if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
-                    // Buluttaki veri daha yeni (son senkronizasyondan sonra güncellenmiş veya silinmiş) → indir
-                    toDownload.add(remoteItem)
+                // 2. SETTINGS (Uygulama Ayarları):
+                if (localItem.dataType == SyncDataType.SETTINGS.name) {
+                    if (isLocallyDirty) {
+                        // Kullanıcı bu cihazda bu ayarı bizzat değiştirdi -> Yükle
+                        toUpload.add(localItem)
+                    } else {
+                        // Bu cihaz sadece açıldı veya bu ayara dokunulmadı -> Buluttaki ayarı uygula
+                        toDownload.add(remoteItem)
+                    }
                     conflictCount++
-                } else {
-                    // Bu cihazda yerel olarak değişti veya silindi → yükle
-                    toUpload.add(localItem)
-                    conflictCount++
+                    continue
                 }
+
+                // 3. BOOKMARKS, WATCH_PROGRESS, REPOS ve diğerleri:
+                if (isLocallyDirty) {
+                    toUpload.add(localItem)
+                } else if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
+                    // Buluttaki veri daha yeni (veya ilk senkronizasyon) -> İndir
+                    toDownload.add(remoteItem)
+                } else {
+                    // Yerel veri daha yeni -> Yükle
+                    toUpload.add(localItem)
+                }
+                conflictCount++
             }
         }
 
@@ -97,7 +127,7 @@ class ConflictResolver {
             }
         }
 
-        Log.i(TAG, "Çözümleme tamamlandı: " +
+        Log.i(TAG, "Çözümleme tamamlandı (dirtyTypes=${dirtyTypes.map { it.name }}): " +
                 "${toUpload.size} yüklenecek, " +
                 "${toDownload.size} indirilecek, " +
                 "$conflictCount çakışma çözüldü")
@@ -111,14 +141,29 @@ class ConflictResolver {
 
     /**
      * Supabase timestamp string'ini Long'a çevirir.
-     * Format: "2024-01-15T12:30:00+00:00" veya null
+     * Supabase ISO 8601 formatlarını (mikrosaniye, 'Z', '+00:00') hatasız parse eder.
      */
     private fun parseTimestamp(timestamp: String?): Long {
-        if (timestamp == null) return 0L
+        if (timestamp.isNullOrBlank()) return 0L
         return try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                java.time.Instant.parse(timestamp).toEpochMilli()
+            } else {
+                parseTimestampLegacy(timestamp)
+            }
+        } catch (_: Throwable) {
+            parseTimestampLegacy(timestamp)
+        }
+    }
+
+    private fun parseTimestampLegacy(timestamp: String?): Long {
+        if (timestamp.isNullOrBlank()) return 0L
+        return try {
+            // "2026-09-17T18:14:26.123456+00:00" -> "2026-09-17T18:14:26"
+            val clean = timestamp.substringBefore('.').substringBefore('+').substringBefore('Z')
             java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US).apply {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
-            }.parse(timestamp.substringBefore('+').substringBefore('Z'))?.time ?: 0L
+            }.parse(clean)?.time ?: 0L
         } catch (e: Exception) {
             Log.w(TAG, "Timestamp parse hatası: $timestamp", e)
             0L

@@ -84,15 +84,19 @@ class DataExtractor(private val context: Context) {
         // Arama Geçmişi özel kontrolü (boş arama listesi silinmiş sayılır)
         if (dataTypes.contains(SyncDataType.SEARCH_HISTORY)) {
             val searchItem = items.find { it.dataType == SyncDataType.SEARCH_HISTORY.name }
-            val isSearchEmpty = searchItem == null ||
+            val knownKeys = SyncConfig.getKnownKeys(context)
+            val hadKnownSearch = knownKeys.any { it.contains("search_history", ignoreCase = true) }
+
+            val isExplicitlyEmpty = searchItem != null && (
                     searchItem.dataValue == null ||
                     searchItem.dataValue == "s:[]" ||
                     searchItem.dataValue == "ss:[]" ||
                     searchItem.dataValue == "s:\"\"" ||
                     searchItem.dataValue == "s:{}"
+            )
 
-            if (isSearchEmpty) {
-                // Yerelde arama geçmişi boşaltılmış veya silinmiş!
+            if (isExplicitlyEmpty || (searchItem == null && hadKnownSearch)) {
+                // Yerelde daha önce arama geçmişi vardı ve şimdi kullanıcı tarafından temizlendi!
                 items.removeAll { it.dataType == SyncDataType.SEARCH_HISTORY.name }
                 items.add(
                     SyncDataItem(
@@ -104,7 +108,7 @@ class DataExtractor(private val context: Context) {
                         updatedAt = null
                     )
                 )
-                Log.i(TAG, "Arama geçmişi boş veya temizlenmiş tespit edildi -> Tombstone eklendi")
+                Log.i(TAG, "Arama geçmişi kullanıcı tarafından temizlendi -> Tombstone eklendi")
             }
         }
 
@@ -217,26 +221,26 @@ class DataExtractor(private val context: Context) {
 
             // ==================== 1. ARAMA GEÇMİŞİ (SEARCH_HISTORY) ====================
             if (item.dataType == SyncDataType.SEARCH_HISTORY.name) {
-                if (isDeleted || value == "s:[]" || value == "ss:[]" || value == "s:\"\"") {
-                    // Arama geçmişi silindi (Tombstone): Tüm hesap ve varyasyonlardan tamamen sil
-                    rebuildEditor.remove(item.dataKey)
-                    rebuildEditor.remove("search_history")
-                    rebuildEditor.remove("$currentAccount/search_history")
-                    defaultEditor.remove(item.dataKey)
-                    defaultEditor.remove("search_history")
-                    defaultEditor.remove("$currentAccount/search_history")
-                    Log.i(TAG, "Arama geçmişi yerel hafızadan temizlendi (Tombstone)")
-                } else if (value != null) {
-                    // Yeni arama geçmişi geldi: Eski geçmişin üstüne binmemesi için önce temizle, sonra yaz
-                    rebuildEditor.remove("search_history")
-                    rebuildEditor.remove("$currentAccount/search_history")
-                    defaultEditor.remove("search_history")
-                    defaultEditor.remove("$currentAccount/search_history")
+                // Tüm geçmiş anahtarlarını hem rebuild hem default prefs'ten temizle
+                rebuildPrefs.all?.keys?.forEach { k ->
+                    if (k.contains("search_history", ignoreCase = true)) {
+                        rebuildEditor.remove(k)
+                    }
+                }
+                defaultPrefs.all?.keys?.forEach { k ->
+                    if (k.contains("search_history", ignoreCase = true)) {
+                        defaultEditor.remove(k)
+                    }
+                }
 
+                if (isDeleted || value == "s:[]" || value == "ss:[]" || value == "s:\"\"") {
+                    Log.i(TAG, "Arama geçmişi yerel hafızadan tamamen temizlendi (Tombstone)")
+                } else if (value != null) {
+                    // Temizlenen hafızaya yeni güncel arama geçmişini yaz
                     deserializeAndApply(rebuildEditor, "$currentAccount/search_history", value)
                     deserializeAndApply(rebuildEditor, "search_history", value)
                     deserializeAndApply(defaultEditor, "search_history", value)
-                    Log.i(TAG, "Yeni arama geçmişi uygulandı (eski geçmiş temizlendi)")
+                    Log.i(TAG, "Yeni arama geçmişi uygulandı: $value")
                 }
                 appliedCount++
                 continue
