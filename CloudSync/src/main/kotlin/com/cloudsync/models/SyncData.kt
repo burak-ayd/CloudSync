@@ -73,6 +73,7 @@ enum class SyncDataType(val displayName: String, val keyPatterns: List<String>) 
             "result_favorites_state_data",
             "result_watch_state_data",
             "result_subscribed_state_data",
+            "result_watch_state",
             "bookmark_",
             "favorites_"
         )
@@ -80,10 +81,10 @@ enum class SyncDataType(val displayName: String, val keyPatterns: List<String>) 
     WATCH_PROGRESS(
         "Kaldığın Yerden Devam",
         listOf(
+            "result_resume_watching_2",
             "result_resume_watching",
             "video_pos_dur",
             "video_watch_state",
-            "result_watch_state",
             "download_header_cache",
             "result_season",
             "result_dub",

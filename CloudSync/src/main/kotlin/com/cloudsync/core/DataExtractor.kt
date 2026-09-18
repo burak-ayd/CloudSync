@@ -452,7 +452,8 @@ class DataExtractor(private val context: Context) {
             }
 
             // ==================== 3. ÖĞE BAZLI VERİLER (BOOKMARKS, PROGRESS, REPOS) ====================
-            val isRebuildItem = item.dataKey.contains("/") ||
+            val isRebuildItem = item.dataType != SyncDataType.SETTINGS.name ||
+                    item.dataKey.contains("/") ||
                     Regex("^[0-9]+/").containsMatchIn(item.dataKey)
 
             val editor = if (isRebuildItem) rebuildEditor else defaultEditor
@@ -462,18 +463,17 @@ class DataExtractor(private val context: Context) {
                 editor.remove(item.dataKey)
 
                 if (accountMatch != null) {
+                    val sourceAccount = accountMatch.groupValues[1]
                     val relativePath = accountMatch.groupValues[2]
                     rebuildEditor.remove("$currentAccount/$relativePath")
-
-                    if (relativePath.startsWith("result_watch_state_data")) {
-                        val counterpart = relativePath.replace("result_watch_state_data", "result_watch_state")
-                        rebuildEditor.remove("$currentAccount/$counterpart")
-                        rebuildEditor.remove("${accountMatch.groupValues[1]}/$counterpart")
+                    rebuildEditor.remove(relativePath)
+                    if (sourceAccount != currentAccount) {
+                        rebuildEditor.remove("$sourceAccount/$relativePath")
                     }
-                    if (relativePath.startsWith("result_resume_watching")) {
-                        val counterpart = relativePath.replace("result_resume_watching", "result_resume_watching_2")
-                        rebuildEditor.remove("$currentAccount/$counterpart")
-                        rebuildEditor.remove("${accountMatch.groupValues[1]}/$counterpart")
+
+                    if (relativePath.startsWith("result_watch_state")) {
+                        rebuildEditor.remove("$currentAccount/result_watch_state")
+                        rebuildEditor.remove("$currentAccount/result_watch_state_data")
                     }
                 }
                 appliedCount++
@@ -492,43 +492,17 @@ class DataExtractor(private val context: Context) {
 
                 // CloudStream'in hesap öneksiz okuyabilen bileşenleri için de yaz
                 deserializeAndApply(rebuildEditor, relativePath, value)
-
-                // result_watch_state ve result_watch_state_data sürüm uyumluluğu
-                if (relativePath.startsWith("result_watch_state_data")) {
-                    val counterpart = relativePath.replace("result_watch_state_data", "result_watch_state")
-                    deserializeAndApply(rebuildEditor, "$currentAccount/$counterpart", value)
-                    deserializeAndApply(rebuildEditor, "$sourceAccount/$counterpart", value)
-                    deserializeAndApply(rebuildEditor, counterpart, value)
-                } else if (relativePath.startsWith("result_watch_state")) {
-                    val counterpart = relativePath.replace("result_watch_state", "result_watch_state_data")
-                    deserializeAndApply(rebuildEditor, "$currentAccount/$counterpart", value)
-                    deserializeAndApply(rebuildEditor, "$sourceAccount/$counterpart", value)
-                    deserializeAndApply(rebuildEditor, counterpart, value)
-                }
-
-                // result_resume_watching ve result_resume_watching_2 sürüm uyumluluğu
-                if (relativePath.startsWith("result_resume_watching_2")) {
-                    val counterpart = relativePath.replace("result_resume_watching_2", "result_resume_watching")
-                    deserializeAndApply(rebuildEditor, "$currentAccount/$counterpart", value)
-                    deserializeAndApply(rebuildEditor, "$sourceAccount/$counterpart", value)
-                    deserializeAndApply(rebuildEditor, counterpart, value)
-                } else if (relativePath.startsWith("result_resume_watching")) {
-                    val counterpart = relativePath.replace("result_resume_watching", "result_resume_watching_2")
-                    deserializeAndApply(rebuildEditor, "$currentAccount/$counterpart", value)
-                    deserializeAndApply(rebuildEditor, "$sourceAccount/$counterpart", value)
-                    deserializeAndApply(rebuildEditor, counterpart, value)
-                }
             } else if (isRebuildItem) {
                 // Key'in başında hesap öneki yoksa (örn: "video_pos_dur/123"), aktif profil altına da yaz
                 deserializeAndApply(rebuildEditor, "$currentAccount/${item.dataKey}", value)
             }
         }
 
-        val defaultOk = defaultEditor.commit()
-        val rebuildOk = rebuildEditor.commit()
+        defaultEditor.apply()
+        rebuildEditor.apply()
 
         scheduler?.endRestore()
-        Log.i(TAG, "$appliedCount veri uygulandı/silindi (defaultCommit=$defaultOk, rebuildCommit=$rebuildOk, Hedef aktif profil: $currentAccount)")
+        Log.i(TAG, "$appliedCount veri uygulandı/silindi (Hedef aktif profil: $currentAccount)")
     }
 
     /**

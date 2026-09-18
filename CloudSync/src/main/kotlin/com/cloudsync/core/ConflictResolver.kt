@@ -66,6 +66,12 @@ class ConflictResolver {
                         if (isLocallyDirty || lastSyncTime == 0L) {
                             toUpload.add(localItem)
                         }
+                    } else if (dataType == SyncDataType.WATCH_PROGRESS && localItem.dataKey.contains("video_pos_dur")) {
+                        // Eğer yerel pozisyon 0 veya geçersizse buluta yükleyip boşuna yer kaplama
+                        val pos = extractPosition(localItem.dataValue)
+                        if (pos != null && pos > 0L) {
+                            toUpload.add(localItem)
+                        }
                     } else {
                         toUpload.add(localItem)
                     }
@@ -114,25 +120,42 @@ class ConflictResolver {
 
                 // 2. WATCH_PROGRESS (Kaldığın Yerden Devam & İlerleme):
                 if (dataType == SyncDataType.WATCH_PROGRESS) {
-                    if (isLocallyDirty) {
-                        toUpload.add(localItem)
-                    } else if (localItem.dataKey.contains("video_pos_dur")) {
-                        // Oynatma konumu çakışması: Daha ileride olan (daha büyük position) kazanır!
+                    val isVideoPos = localItem.dataKey.contains("video_pos_dur") ||
+                            remoteItem.dataKey.contains("video_pos_dur")
+
+                    if (isVideoPos) {
+                        // Oynatma konumu çakışması: Daha ileride olan (daha büyük position) her zaman kazanır!
+                        // isLocallyDirty bayrağına bakılmaksızın pozisyon karşılaştırması esastır.
                         val localPos = extractPosition(localItem.dataValue)
                         val remotePos = extractPosition(remoteItem.dataValue)
-                        if (localPos != null && remotePos != null) {
-                            if (localPos > remotePos) {
-                                Log.i(TAG, "Yerel izleme konumu daha ileri ($localPos > $remotePos) -> Yükleniyor: ${localItem.dataKey}")
-                                toUpload.add(localItem)
-                            } else {
-                                Log.i(TAG, "Bulut izleme konumu daha ileri ($remotePos >= $localPos) -> İndiriliyor: ${remoteItem.dataKey}")
+
+                        when {
+                            localPos != null && remotePos != null -> {
+                                if (localPos > remotePos) {
+                                    Log.i(TAG, "Yerel izleme konumu daha ileri ($localPos > $remotePos) -> Yükleniyor: ${localItem.dataKey}")
+                                    toUpload.add(localItem)
+                                } else {
+                                    Log.i(TAG, "Bulut izleme konumu daha ileri ($remotePos >= $localPos) -> İndiriliyor: ${remoteItem.dataKey}")
+                                    toDownload.add(remoteItem)
+                                }
+                            }
+                            remotePos != null && (localPos == null || localPos == 0L) -> {
+                                Log.i(TAG, "Bulut izleme konumu var ($remotePos), yerelde yok/0 -> İndiriliyor: ${remoteItem.dataKey}")
                                 toDownload.add(remoteItem)
                             }
-                        } else if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
-                            toDownload.add(remoteItem)
-                        } else {
-                            toUpload.add(localItem)
+                            localPos != null && (remotePos == null || remotePos == 0L) -> {
+                                Log.i(TAG, "Yerel izleme konumu var ($localPos), bulutta yok/0 -> Yükleniyor: ${localItem.dataKey}")
+                                toUpload.add(localItem)
+                            }
+                            lastSyncTime == 0L || remoteTime > lastSyncTime -> {
+                                toDownload.add(remoteItem)
+                            }
+                            else -> {
+                                toUpload.add(localItem)
+                            }
                         }
+                    } else if (isLocallyDirty) {
+                        toUpload.add(localItem)
                     } else if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
                         toDownload.add(remoteItem)
                     } else {
