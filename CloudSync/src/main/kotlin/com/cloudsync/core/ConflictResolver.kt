@@ -162,33 +162,31 @@ class ConflictResolver {
                             remoteItem.dataKey.contains("video_pos_dur")
 
                     if (isVideoPos) {
-                        // Oynatma konumu çakışması: Daha ileride olan (daha büyük position) her zaman kazanır!
-                        // isLocallyDirty bayrağına bakılmaksızın pozisyon karşılaştırması esastır.
+                        // Oynatma konumu çakışması: Normalde daha yeni olan (updated_at) her zaman kazanır.
+                        // Geri sarmalara (rewind) izin vermek için sadece pozisyona bakmıyoruz.
                         val localPos = extractPosition(localItem.dataValue)
                         val remotePos = extractPosition(remoteItem.dataValue)
 
                         when {
-                            localPos != null && remotePos != null -> {
-                                if (localPos > remotePos) {
-                                    Log.i(TAG, "Yerel izleme konumu daha ileri ($localPos > $remotePos) -> Yükleniyor: ${localItem.dataKey}")
+                            // Gerçek Çakışma: Hem bulutta yeni veri var hem de bu cihazda yeni izleme yapılmış.
+                            // Bu durumda (veya eşitlikte) en ileri olan pozisyonu tercih edelim.
+                            lastSyncTime != 0L && remoteTime > lastSyncTime && isLocallyDirty -> {
+                                if (localPos != null && remotePos != null && localPos > remotePos) {
+                                    Log.i(TAG, "Çakışma: Yerel izleme konumu daha ileri ($localPos > $remotePos) -> Yükleniyor: ${localItem.dataKey}")
                                     toUpload.add(localItem)
-                                } else if (remotePos > localPos) {
-                                    Log.i(TAG, "Bulut izleme konumu daha ileri ($remotePos > $localPos) -> İndiriliyor: ${remoteItem.dataKey}")
+                                } else {
+                                    Log.i(TAG, "Çakışma: Bulut izleme konumu daha ileri veya eşit ($remotePos >= $localPos) -> İndiriliyor: ${remoteItem.dataKey}")
                                     toDownload.add(remoteItem)
                                 }
                             }
-                            remotePos != null && (localPos == null || localPos == 0L) -> {
-                                Log.i(TAG, "Bulut izleme konumu var ($remotePos), yerelde yok/0 -> İndiriliyor: ${remoteItem.dataKey}")
-                                toDownload.add(remoteItem)
-                            }
-                            localPos != null && (remotePos == null || remotePos == 0L) -> {
-                                Log.i(TAG, "Yerel izleme konumu var ($localPos), bulutta yok/0 -> Yükleniyor: ${localItem.dataKey}")
-                                toUpload.add(localItem)
-                            }
+                            // Bulut verisi daha yeniyse indir (geri sarmayı desteklemek için bulutu tercih et)
                             lastSyncTime == 0L || remoteTime > lastSyncTime -> {
+                                Log.i(TAG, "Bulut izleme konumu daha yeni -> İndiriliyor: ${remoteItem.dataKey}")
                                 toDownload.add(remoteItem)
                             }
+                            // Bulut eski, yerelde değişiklik var veya farklı
                             else -> {
+                                Log.i(TAG, "Yerel izleme konumu buluta gönderiliyor -> Yükleniyor: ${localItem.dataKey}")
                                 toUpload.add(localItem)
                             }
                         }
