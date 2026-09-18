@@ -82,7 +82,6 @@ enum class SyncDataType(val displayName: String, val keyPatterns: List<String>) 
         "Kaldığın Yerden Devam",
         listOf(
             "result_resume_watching_2",
-            "result_resume_watching",
             "video_pos_dur",
             "video_watch_state",
             "download_header_cache",

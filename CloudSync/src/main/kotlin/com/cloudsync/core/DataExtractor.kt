@@ -75,6 +75,12 @@ class DataExtractor(private val context: Context) {
 
         fun isNonTransferable(key: String): Boolean {
             val lower = key.lowercase()
+            // Eski/geçersiz "result_resume_watching" anahtarları (2 olmayanlar) CloudStream'in
+            // migrateResumeWatching fonksiyonunu tetikleyip episodeId'yi null yaptığı için
+            // kesinlikle transfer edilmemeli ve yok sayılmalıdır.
+            if (lower.contains("result_resume_watching") && !lower.contains("result_resume_watching_2")) {
+                return true
+            }
             return nonTransferableKeys.any { lower.contains(it.lowercase()) } ||
                     lower.startsWith("cloudsync_")
         }
@@ -263,6 +269,16 @@ class DataExtractor(private val context: Context) {
         for ((key, value) in allEntries) {
             if (SyncConfig.isCloudSyncKey(key)) continue
             if (isNonTransferable(key)) continue
+
+            // rebuild_preference içinde hesap öneksiz kalmış çöp anahtarları atla (download_header_cache hariç)
+            if (isRebuildPrefs && !Regex("^[0-9]+/").containsMatchIn(key) && !key.startsWith("download_header_cache")) {
+                if (key.startsWith("video_pos_dur") || key.startsWith("result_resume_watching") ||
+                    key.startsWith("video_watch_state") || key.startsWith("result_watch_state") ||
+                    key.startsWith("result_favorites_state_data") || key.startsWith("result_subscribed_state_data") ||
+                    key.startsWith("result_season") || key.startsWith("result_episode") || key.startsWith("result_dub")) {
+                    continue
+                }
+            }
 
             val dataType = SyncDataType.fromKey(key, isRebuildPrefs)
             if (!dataTypes.contains(dataType)) continue
@@ -466,6 +482,7 @@ class DataExtractor(private val context: Context) {
                     val sourceAccount = accountMatch.groupValues[1]
                     val relativePath = accountMatch.groupValues[2]
                     rebuildEditor.remove("$currentAccount/$relativePath")
+                    rebuildEditor.remove("0/$relativePath")
                     rebuildEditor.remove(relativePath)
                     if (sourceAccount != currentAccount) {
                         rebuildEditor.remove("$sourceAccount/$relativePath")
@@ -475,26 +492,61 @@ class DataExtractor(private val context: Context) {
                         rebuildEditor.remove("$currentAccount/result_watch_state")
                         rebuildEditor.remove("$currentAccount/result_watch_state_data")
                     }
+                } else {
+                    rebuildEditor.remove("$currentAccount/${item.dataKey}")
+                    rebuildEditor.remove("0/${item.dataKey}")
                 }
                 appliedCount++
                 continue
             }
 
-            deserializeAndApply(editor, item.dataKey, value)
-            appliedCount++
+            val rawVal = value ?: continue
+            val targetValue = if (item.dataKey.contains("result_resume_watching_2")) {
+                repairResumeWatchingJson(rawVal, rebuildPrefs, currentAccount)
+            } else {
+                rawVal
+            }
 
             if (accountMatch != null) {
                 val sourceAccount = accountMatch.groupValues[1]
                 val relativePath = accountMatch.groupValues[2]
-                if (sourceAccount != currentAccount) {
-                    deserializeAndApply(rebuildEditor, "$currentAccount/$relativePath", value)
+
+                // CloudStream rebuild_preference verilerini HER ZAMAN hesap önekiyle okur ($currentAccount/...)
+                deserializeAndApply(rebuildEditor, "$currentAccount/$relativePath", targetValue)
+                if (currentAccount != "0") {
+                    deserializeAndApply(rebuildEditor, "0/$relativePath", targetValue)
+                }
+                if (sourceAccount != currentAccount && sourceAccount != "0") {
+                    deserializeAndApply(rebuildEditor, "$sourceAccount/$relativePath", targetValue)
                 }
 
-                // CloudStream'in hesap öneksiz okuyabilen bileşenleri için de yaz
-                deserializeAndApply(rebuildEditor, relativePath, value)
+                // Eski sürümlerin oluşturduğu hesapsız çöp anahtarı temizle (download_header_cache hariç)
+                if (!relativePath.startsWith("download_header_cache")) {
+                    rebuildEditor.remove(relativePath)
+                }
+            } else if (item.dataKey.startsWith("download_header_cache")) {
+                // download_header_cache hesapsız saklanır
+                deserializeAndApply(rebuildEditor, item.dataKey, targetValue)
+                rebuildEditor.remove("$currentAccount/${item.dataKey}")
+                rebuildEditor.remove("0/${item.dataKey}")
             } else if (isRebuildItem) {
-                // Key'in başında hesap öneki yoksa (örn: "video_pos_dur/123"), aktif profil altına da yaz
-                deserializeAndApply(rebuildEditor, "$currentAccount/${item.dataKey}", value)
+                // Key'in başında hesap öneki yoksa, sadece profil önekiyle yaz ve hesapsızı sil
+                deserializeAndApply(rebuildEditor, "$currentAccount/${item.dataKey}", targetValue)
+                if (currentAccount != "0") {
+                    deserializeAndApply(rebuildEditor, "0/${item.dataKey}", targetValue)
+                }
+                rebuildEditor.remove(item.dataKey)
+            } else {
+                deserializeAndApply(defaultEditor, item.dataKey, targetValue)
+            }
+            appliedCount++
+        }
+
+        // Eski legacy result_resume_watching anahtarlarını yerelden tamamen temizle ki CloudStream'in
+        // migrateResumeWatching() fonksiyonu tetiklenip episodeId'yi null yapmasın
+        rebuildPrefs.all?.keys?.forEach { k ->
+            if (k.contains("result_resume_watching") && !k.contains("result_resume_watching_2")) {
+                rebuildEditor.remove(k)
             }
         }
 
@@ -503,6 +555,52 @@ class DataExtractor(private val context: Context) {
 
         scheduler?.endRestore()
         Log.i(TAG, "$appliedCount veri uygulandı/silindi (Hedef aktif profil: $currentAccount)")
+    }
+
+    /**
+     * ResumeWatching JSON verisinde episodeId null ise (CloudStream migrasyon hatası sonucu),
+     * parentId ve yerel video_pos_dur eşleşmesine bakarak episodeId'yi tamir eder.
+     */
+    private fun repairResumeWatchingJson(
+        jsonValue: String,
+        prefs: SharedPreferences,
+        account: String
+    ): String {
+        return try {
+            val prefix = when {
+                jsonValue.startsWith("s:") -> "s:"
+                jsonValue.startsWith("j:") -> "j:"
+                else -> ""
+            }
+            var raw = if (prefix.isNotEmpty()) jsonValue.substring(prefix.length) else jsonValue
+            if (raw.startsWith("\"") && raw.endsWith("\"") && raw.length > 2) {
+                try {
+                    raw = objectMapper.readValue(raw, String::class.java)
+                } catch (_: Exception) {}
+            }
+            if (raw.startsWith("{")) {
+                val node = objectMapper.readTree(raw) as? com.fasterxml.jackson.databind.node.ObjectNode
+                    ?: return jsonValue
+                val epNode = node.get("episodeId")
+                val isNullOrZero = epNode == null || epNode.isNull || epNode.asInt(0) == 0
+                if (isNullOrZero && node.has("parentId") && !node.get("parentId").isNull) {
+                    val parentId = node.get("parentId").asInt()
+                    // Film / tek bölüm kontrolü: Eğer parentId için video_pos_dur varsa, bu bir filmdir ve episodeId = parentId olmalıdır
+                    val hasPosForParent = prefs.contains("$account/video_pos_dur/$parentId") ||
+                            prefs.contains("0/video_pos_dur/$parentId")
+                    val isMovieCandidate = node.path("episode").asInt(0) <= 1 && node.path("season").asInt(0) <= 1
+                    if (hasPosForParent || isMovieCandidate) {
+                        node.put("episodeId", parentId)
+                        Log.i(TAG, "ResumeWatching episodeId tamir edildi (parentId=$parentId -> episodeId=$parentId)")
+                        val updated = objectMapper.writeValueAsString(node)
+                        return if (prefix.isNotEmpty()) "$prefix$updated" else updated
+                    }
+                }
+            }
+            jsonValue
+        } catch (_: Exception) {
+            jsonValue
+        }
     }
 
     /**
@@ -533,6 +631,14 @@ class DataExtractor(private val context: Context) {
             }
             rebuildPrefs.all?.keys?.forEach { key ->
                 if (!isNonTransferable(key) && !SyncConfig.isCloudSyncKey(key)) {
+                    if (!Regex("^[0-9]+/").containsMatchIn(key) && !key.startsWith("download_header_cache")) {
+                        if (key.startsWith("video_pos_dur") || key.startsWith("result_resume_watching") ||
+                            key.startsWith("video_watch_state") || key.startsWith("result_watch_state") ||
+                            key.startsWith("result_favorites_state_data") || key.startsWith("result_subscribed_state_data") ||
+                            key.startsWith("result_season") || key.startsWith("result_episode") || key.startsWith("result_dub")) {
+                            return@forEach
+                        }
+                    }
                     val type = SyncDataType.fromKey(key, isRebuildPrefs = true)
                     if (otherTypes.contains(type)) keys.add(key)
                 }
@@ -555,8 +661,18 @@ class DataExtractor(private val context: Context) {
             }
         }
         for ((k, _) in rebuildPrefs.all.orEmpty()) {
-            if (!isNonTransferable(k) && !SyncConfig.isCloudSyncKey(k) && SyncDataType.fromKey(k, isRebuildPrefs = true) == type) {
-                count++
+            if (!isNonTransferable(k) && !SyncConfig.isCloudSyncKey(k)) {
+                if (!Regex("^[0-9]+/").containsMatchIn(k) && !k.startsWith("download_header_cache")) {
+                    if (k.startsWith("video_pos_dur") || k.startsWith("result_resume_watching") ||
+                        k.startsWith("video_watch_state") || k.startsWith("result_watch_state") ||
+                        k.startsWith("result_favorites_state_data") || k.startsWith("result_subscribed_state_data") ||
+                        k.startsWith("result_season") || k.startsWith("result_episode") || k.startsWith("result_dub")) {
+                        continue
+                    }
+                }
+                if (SyncDataType.fromKey(k, isRebuildPrefs = true) == type) {
+                    count++
+                }
             }
         }
         return count

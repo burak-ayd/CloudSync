@@ -5,6 +5,7 @@ import com.cloudsync.models.SyncDataItem
 import com.cloudsync.models.SyncDataType
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ObjectNode
 import com.cloudsync.models.PrefsBundle
 
 /**
@@ -44,14 +45,48 @@ class ConflictResolver {
             return "${item.dataType}:$cleanKey"
         }
 
-        val localMap = localItems.associateBy { makeKey(it) }
-        // Supabase'den gelen liste updated_at.desc sırasındadır (en yeni en başta).
-        // associateBy duplicate key durumunda sonuncuyu (en eskiyi) almasın diye distinctBy ile en yeniyi koruyoruz:
-        val remoteMap = remoteItems.distinctBy { makeKey(it) }.associateBy { makeKey(it) }
+        // Yerel verilerden sadece geçerli anahtarları al (eski v1 result_resume_watching veya hesapsız çöp anahtarları atla)
+        val validLocalItems = localItems.filter { item ->
+            val key = item.dataKey
+            if (key.contains("result_resume_watching") && !key.contains("result_resume_watching_2")) {
+                false
+            } else if (item.dataType == SyncDataType.WATCH_PROGRESS.name &&
+                !Regex("^[0-9]+/").containsMatchIn(key) &&
+                !key.startsWith("download_header_cache")) {
+                false
+            } else {
+                true
+            }
+        }
+        val localMap = validLocalItems.associateBy { makeKey(it) }
 
         val toUpload = mutableListOf<SyncDataItem>()   // Local -> Cloud
         val toDownload = mutableListOf<SyncDataItem>()  // Cloud -> Local
         var conflictCount = 0
+
+        // Remote verilerdeki eski v1 kalıntılarını ve hesapsız kopyaları temizle (Supabase'den kalıcı olarak sil)
+        val validRemoteItems = mutableListOf<SyncDataItem>()
+        for (item in remoteItems) {
+            val key = item.dataKey
+            val isLegacyV1Resume = key.contains("result_resume_watching") && !key.contains("result_resume_watching_2")
+            val isUnprefixedProgress = item.dataType == SyncDataType.WATCH_PROGRESS.name &&
+                    !Regex("^[0-9]+/").containsMatchIn(key) &&
+                    !key.startsWith("download_header_cache")
+
+            if (isLegacyV1Resume || isUnprefixedProgress) {
+                // Supabase'deki bu çöp/eski satırı silmek için tombstone ekle
+                if (item.dataValue != DataExtractor.TOMBSTONE_VALUE) {
+                    toUpload.add(item.copy(dataValue = DataExtractor.TOMBSTONE_VALUE))
+                    Log.i(TAG, "Buluttaki eski/çöp anahtar için silme kaydı oluşturuldu (Purge): $key")
+                }
+            } else {
+                validRemoteItems.add(item)
+            }
+        }
+
+        // Supabase'den gelen liste updated_at.desc sırasındadır (en yeni en başta).
+        // associateBy duplicate key durumunda sonuncuyu (en eskiyi) almasın diye distinctBy ile en yeniyi koruyoruz:
+        val remoteMap = validRemoteItems.distinctBy { makeKey(it) }.associateBy { makeKey(it) }
 
         // Local'da olup remote'da olmayanlar
         for ((compositeKey, localItem) in localMap) {
@@ -134,8 +169,8 @@ class ConflictResolver {
                                 if (localPos > remotePos) {
                                     Log.i(TAG, "Yerel izleme konumu daha ileri ($localPos > $remotePos) -> Yükleniyor: ${localItem.dataKey}")
                                     toUpload.add(localItem)
-                                } else {
-                                    Log.i(TAG, "Bulut izleme konumu daha ileri ($remotePos >= $localPos) -> İndiriliyor: ${remoteItem.dataKey}")
+                                } else if (remotePos > localPos) {
+                                    Log.i(TAG, "Bulut izleme konumu daha ileri ($remotePos > $localPos) -> İndiriliyor: ${remoteItem.dataKey}")
                                     toDownload.add(remoteItem)
                                 }
                             }
@@ -149,6 +184,43 @@ class ConflictResolver {
                             }
                             lastSyncTime == 0L || remoteTime > lastSyncTime -> {
                                 toDownload.add(remoteItem)
+                            }
+                            else -> {
+                                toUpload.add(localItem)
+                            }
+                        }
+                    } else if (localItem.dataKey.contains("result_resume_watching_2") || remoteItem.dataKey.contains("result_resume_watching_2")) {
+                        // ResumeWatching karşılaştırması: updateTime ve episodeId bütünlüğü korunur
+                        val localResume = extractResumeData(localItem.dataValue)
+                        val remoteResume = extractResumeData(remoteItem.dataValue)
+
+                        val localTime = localResume?.updateTime ?: 0L
+                        val remoteUpdateTime = remoteResume?.updateTime ?: 0L
+
+                        when {
+                            localTime > remoteUpdateTime -> {
+                                Log.i(TAG, "Yerel izleme kaydı daha yeni ($localTime > $remoteUpdateTime) -> Yükleniyor: ${localItem.dataKey}")
+                                toUpload.add(localItem)
+                            }
+                            remoteUpdateTime > localTime -> {
+                                Log.i(TAG, "Bulut izleme kaydı daha yeni ($remoteUpdateTime > $localTime) -> İndiriliyor: ${remoteItem.dataKey}")
+                                val downloadItem = if (remoteResume?.episodeId == null && localResume?.episodeId != null) {
+                                    remoteItem.copy(dataValue = patchEpisodeId(remoteItem.dataValue ?: "", localResume.episodeId))
+                                } else {
+                                    remoteItem
+                                }
+                                toDownload.add(downloadItem)
+                            }
+                            isLocallyDirty -> {
+                                toUpload.add(localItem)
+                            }
+                            lastSyncTime == 0L || remoteTime > lastSyncTime -> {
+                                val downloadItem = if (remoteResume?.episodeId == null && localResume?.episodeId != null) {
+                                    remoteItem.copy(dataValue = patchEpisodeId(remoteItem.dataValue ?: "", localResume.episodeId))
+                                } else {
+                                    remoteItem
+                                }
+                                toDownload.add(downloadItem)
                             }
                             else -> {
                                 toUpload.add(localItem)
@@ -256,22 +328,71 @@ class ConflictResolver {
         }
     }
 
+    data class ResumeData(
+        val parentId: Int?,
+        val episodeId: Int?,
+        val episode: Int?,
+        val season: Int?,
+        val updateTime: Long?
+    )
+
+    private fun extractResumeData(value: String?): ResumeData? {
+        if (value.isNullOrBlank() || value == DataExtractor.TOMBSTONE_VALUE) return null
+        return try {
+            val raw = cleanJsonString(value)
+            if (raw.startsWith("{")) {
+                val node = objectMapper.readTree(raw)
+                val parentId = if (node.has("parentId") && !node.get("parentId").isNull) node.get("parentId").asInt() else null
+                val epNode = node.get("episodeId")
+                val episodeId = if (epNode != null && !epNode.isNull && epNode.asInt(0) != 0) epNode.asInt() else null
+                val episode = if (node.has("episode") && !node.get("episode").isNull) node.get("episode").asInt() else null
+                val season = if (node.has("season") && !node.get("season").isNull) node.get("season").asInt() else null
+                val updateTime = if (node.has("updateTime") && !node.get("updateTime").isNull) node.get("updateTime").asLong() else null
+                ResumeData(parentId, episodeId, episode, season, updateTime)
+            } else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun patchEpisodeId(jsonValue: String, episodeId: Int): String {
+        return try {
+            val prefix = when {
+                jsonValue.startsWith("s:") -> "s:"
+                jsonValue.startsWith("j:") -> "j:"
+                else -> ""
+            }
+            val raw = if (prefix.isNotEmpty()) jsonValue.substring(prefix.length) else jsonValue
+            val node = objectMapper.readTree(raw) as com.fasterxml.jackson.databind.node.ObjectNode
+            node.put("episodeId", episodeId)
+            val updated = objectMapper.writeValueAsString(node)
+            if (prefix.isNotEmpty()) "$prefix$updated" else updated
+        } catch (_: Exception) {
+            jsonValue
+        }
+    }
+
+    private fun cleanJsonString(value: String): String {
+        var raw = when {
+            value.startsWith("s:") -> value.substring(2)
+            value.startsWith("j:") -> value.substring(2)
+            else -> value
+        }
+        if (raw.startsWith("\"") && raw.endsWith("\"") && raw.length > 2) {
+            try {
+                raw = objectMapper.readValue(raw, String::class.java)
+            } catch (_: Exception) {}
+        }
+        return raw
+    }
+
     /**
      * JSON veya serileştirilmiş video_pos_dur değerinden oynatma pozisyonunu (position) ayıklar.
      */
     private fun extractPosition(value: String?): Long? {
         if (value.isNullOrBlank() || value == DataExtractor.TOMBSTONE_VALUE) return null
         return try {
-            var raw = when {
-                value.startsWith("s:") -> value.substring(2)
-                value.startsWith("j:") -> value.substring(2)
-                else -> value
-            }
-            if (raw.startsWith("\"") && raw.endsWith("\"") && raw.length > 2) {
-                try {
-                    raw = objectMapper.readValue(raw, String::class.java)
-                } catch (_: Exception) {}
-            }
+            val raw = cleanJsonString(value)
             if (raw.startsWith("{")) {
                 val node = objectMapper.readTree(raw)
                 if (node.has("position")) {
