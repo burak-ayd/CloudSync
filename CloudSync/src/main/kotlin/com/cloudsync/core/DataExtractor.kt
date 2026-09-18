@@ -509,13 +509,13 @@ class DataExtractor(private val context: Context) {
                         ?: rebuildPrefs.getString("REPOSITORIES_KEY", null)
                     val merged = PluginSyncHelper.mergeRepositoriesJson(localRepo, rawVal)
 
-                    defaultEditor.putString("REPOSITORIES_KEY", merged)
-                    defaultEditor.putString("plugins_repositories", merged)
-                    defaultEditor.putString("repositories", merged)
+                    deserializeAndApply(defaultEditor, "REPOSITORIES_KEY", merged)
+                    deserializeAndApply(defaultEditor, "plugins_repositories", merged)
+                    deserializeAndApply(defaultEditor, "repositories", merged)
 
-                    rebuildEditor.putString("REPOSITORIES_KEY", merged)
-                    rebuildEditor.putString("plugins_repositories", merged)
-                    rebuildEditor.putString("repositories", merged)
+                    deserializeAndApply(rebuildEditor, "REPOSITORIES_KEY", merged)
+                    deserializeAndApply(rebuildEditor, "plugins_repositories", merged)
+                    deserializeAndApply(rebuildEditor, "repositories", merged)
 
                     rebuildEditor.remove("0/REPOSITORIES_KEY")
                     rebuildEditor.remove("$currentAccount/REPOSITORIES_KEY")
@@ -527,8 +527,8 @@ class DataExtractor(private val context: Context) {
                         ?: rebuildPrefs.getString("PLUGINS_KEY", null)
                     val merged = PluginSyncHelper.mergePluginsJson(localPlugin, rawVal)
 
-                    defaultEditor.putString("PLUGINS_KEY", merged)
-                    rebuildEditor.putString("PLUGINS_KEY", merged)
+                    deserializeAndApply(defaultEditor, "PLUGINS_KEY", merged)
+                    deserializeAndApply(rebuildEditor, "PLUGINS_KEY", merged)
 
                     rebuildEditor.remove("0/PLUGINS_KEY")
                     rebuildEditor.remove("$currentAccount/PLUGINS_KEY")

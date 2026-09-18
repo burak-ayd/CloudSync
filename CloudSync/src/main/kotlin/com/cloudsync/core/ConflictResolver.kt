@@ -107,7 +107,7 @@ class ConflictResolver {
                     } else if (dataType == SyncDataType.WATCH_PROGRESS && localItem.dataKey.contains("video_pos_dur")) {
                         // Eğer yerel pozisyon 0 veya geçersizse buluta yükleyip boşuna yer kaplama
                         val pos = extractPosition(localItem.dataValue)
-                        if (pos != null && pos > 0L) {
+                        if (pos == null || pos > 0L) {
                             toUpload.add(localItem)
                         }
                     } else {
@@ -440,6 +440,8 @@ class ConflictResolver {
                 val node = objectMapper.readTree(raw)
                 if (node.has("position")) {
                     node.get("position").asLong()
+                } else if (node.has("pos")) {
+                    node.get("pos").asLong()
                 } else null
             } else null
         } catch (_: Exception) {
