@@ -489,6 +489,38 @@ class DataExtractor(private val context: Context) {
                 if (sourceAccount != currentAccount) {
                     deserializeAndApply(rebuildEditor, "$currentAccount/$relativePath", value)
                 }
+
+                // CloudStream'in hesap öneksiz okuyabilen bileşenleri için de yaz
+                deserializeAndApply(rebuildEditor, relativePath, value)
+
+                // result_watch_state ve result_watch_state_data sürüm uyumluluğu
+                if (relativePath.startsWith("result_watch_state_data")) {
+                    val counterpart = relativePath.replace("result_watch_state_data", "result_watch_state")
+                    deserializeAndApply(rebuildEditor, "$currentAccount/$counterpart", value)
+                    deserializeAndApply(rebuildEditor, "$sourceAccount/$counterpart", value)
+                    deserializeAndApply(rebuildEditor, counterpart, value)
+                } else if (relativePath.startsWith("result_watch_state")) {
+                    val counterpart = relativePath.replace("result_watch_state", "result_watch_state_data")
+                    deserializeAndApply(rebuildEditor, "$currentAccount/$counterpart", value)
+                    deserializeAndApply(rebuildEditor, "$sourceAccount/$counterpart", value)
+                    deserializeAndApply(rebuildEditor, counterpart, value)
+                }
+
+                // result_resume_watching ve result_resume_watching_2 sürüm uyumluluğu
+                if (relativePath.startsWith("result_resume_watching_2")) {
+                    val counterpart = relativePath.replace("result_resume_watching_2", "result_resume_watching")
+                    deserializeAndApply(rebuildEditor, "$currentAccount/$counterpart", value)
+                    deserializeAndApply(rebuildEditor, "$sourceAccount/$counterpart", value)
+                    deserializeAndApply(rebuildEditor, counterpart, value)
+                } else if (relativePath.startsWith("result_resume_watching")) {
+                    val counterpart = relativePath.replace("result_resume_watching", "result_resume_watching_2")
+                    deserializeAndApply(rebuildEditor, "$currentAccount/$counterpart", value)
+                    deserializeAndApply(rebuildEditor, "$sourceAccount/$counterpart", value)
+                    deserializeAndApply(rebuildEditor, counterpart, value)
+                }
+            } else if (isRebuildItem) {
+                // Key'in başında hesap öneki yoksa (örn: "video_pos_dur/123"), aktif profil altına da yaz
+                deserializeAndApply(rebuildEditor, "$currentAccount/${item.dataKey}", value)
             }
         }
 
@@ -604,12 +636,23 @@ class DataExtractor(private val context: Context) {
                     editor.putStringSet(key, set)
                 }
                 serializedValue.startsWith("s:") -> {
+                    var raw = serializedValue.substring(2)
+                    if (raw.startsWith("\"") && raw.endsWith("\"") && raw.length > 2) {
+                        try {
+                            raw = objectMapper.readValue(raw, String::class.java)
+                        } catch (_: Exception) {}
+                    }
+                    editor.putString(key, raw)
+                }
+                serializedValue.startsWith("j:") -> {
+                    // Eski sürümlerden kalan j: önekli JSON verilerini string olarak kaydet
                     editor.putString(key, serializedValue.substring(2))
                 }
                 else -> {
                     // Tip öneki yoksa tahmin et (geriye dönük uyumluluk)
                     when {
                         serializedValue == "true" || serializedValue == "false" -> editor.putBoolean(key, serializedValue.toBoolean())
+                        serializedValue.startsWith("{") || serializedValue.startsWith("[") -> editor.putString(key, serializedValue)
                         serializedValue.toIntOrNull() != null -> editor.putInt(key, serializedValue.toInt())
                         serializedValue.toLongOrNull() != null -> editor.putLong(key, serializedValue.toLong())
                         serializedValue.toFloatOrNull() != null -> editor.putFloat(key, serializedValue.toFloat())

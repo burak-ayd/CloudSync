@@ -40,7 +40,8 @@ class ConflictResolver {
     ): ResolveResult {
         // Composite key oluştururken hesap öneklerini temizle (cihazlar arası hesap id uyumsuzluğunu gidermek için)
         fun makeKey(item: SyncDataItem): String {
-            return "${item.dataType}:${item.dataKey}"
+            val cleanKey = item.dataKey.replaceFirst(Regex("^[0-9]+/"), "")
+            return "${item.dataType}:$cleanKey"
         }
 
         val localMap = localItems.associateBy { makeKey(it) }
@@ -111,11 +112,43 @@ class ConflictResolver {
                     continue
                 }
 
-                // 3. BOOKMARKS, WATCH_PROGRESS, REPOS ve diğerleri:
+                // 2. WATCH_PROGRESS (Kaldığın Yerden Devam & İlerleme):
+                if (dataType == SyncDataType.WATCH_PROGRESS) {
+                    if (isLocallyDirty) {
+                        toUpload.add(localItem)
+                    } else if (localItem.dataKey.contains("video_pos_dur")) {
+                        // Oynatma konumu çakışması: Daha ileride olan (daha büyük position) kazanır!
+                        val localPos = extractPosition(localItem.dataValue)
+                        val remotePos = extractPosition(remoteItem.dataValue)
+                        if (localPos != null && remotePos != null) {
+                            if (localPos > remotePos) {
+                                Log.i(TAG, "Yerel izleme konumu daha ileri ($localPos > $remotePos) -> Yükleniyor: ${localItem.dataKey}")
+                                toUpload.add(localItem)
+                            } else {
+                                Log.i(TAG, "Bulut izleme konumu daha ileri ($remotePos >= $localPos) -> İndiriliyor: ${remoteItem.dataKey}")
+                                toDownload.add(remoteItem)
+                            }
+                        } else if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
+                            toDownload.add(remoteItem)
+                        } else {
+                            toUpload.add(localItem)
+                        }
+                    } else if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
+                        toDownload.add(remoteItem)
+                    } else {
+                        toUpload.add(localItem)
+                    }
+                    conflictCount++
+                    continue
+                }
+
+                // 3. BOOKMARKS, REPOS ve diğerleri:
                 if (isLocallyDirty) {
                     toUpload.add(localItem)
-                } else {
+                } else if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
                     toDownload.add(remoteItem)
+                } else {
+                    toUpload.add(localItem)
                 }
                 conflictCount++
             }
@@ -197,6 +230,33 @@ class ConflictResolver {
         } catch (e: Exception) {
             Log.e(TAG, "Demetler birleştirilirken hata: ${e.message}")
             localValue
+        }
+    }
+
+    /**
+     * JSON veya serileştirilmiş video_pos_dur değerinden oynatma pozisyonunu (position) ayıklar.
+     */
+    private fun extractPosition(value: String?): Long? {
+        if (value.isNullOrBlank() || value == DataExtractor.TOMBSTONE_VALUE) return null
+        return try {
+            var raw = when {
+                value.startsWith("s:") -> value.substring(2)
+                value.startsWith("j:") -> value.substring(2)
+                else -> value
+            }
+            if (raw.startsWith("\"") && raw.endsWith("\"") && raw.length > 2) {
+                try {
+                    raw = objectMapper.readValue(raw, String::class.java)
+                } catch (_: Exception) {}
+            }
+            if (raw.startsWith("{")) {
+                val node = objectMapper.readTree(raw)
+                if (node.has("position")) {
+                    node.get("position").asLong()
+                } else null
+            } else null
+        } catch (_: Exception) {
+            null
         }
     }
 

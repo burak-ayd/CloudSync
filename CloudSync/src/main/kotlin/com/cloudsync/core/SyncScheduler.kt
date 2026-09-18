@@ -200,7 +200,8 @@ class SyncScheduler(private val context: Context) {
             if (!SyncConfig.isConfigured(context)) return@OnSharedPreferenceChangeListener
 
             // Key'in hangi veri tipine ait olduğunu belirle
-            val dataType = classifyKey(key)
+            val isRebuild = key.contains("/") || Regex("^[0-9]+/").containsMatchIn(key)
+            val dataType = classifyKey(key, isRebuild)
 
             // Uygulama açılışında ilk 10 saniye boyunca CloudStream'in kendi yazdığı dahili ayarların
             // ayarları "kirli" (dirty) olarak işaretleyip bulutu ezmesini engelle
@@ -309,25 +310,34 @@ class SyncScheduler(private val context: Context) {
 
     /**
      * Uygulama ön plana geldiğinde çağrılır.
-     * Diğer cihazlardan gelen değişiklikleri çekmek için otomatik pull yapar.
+     * PlayerActivity kapandıktan sonra bekleyen yerel değişiklikler (video_pos_dur vb.) varsa
+     * bunları önce consume edip buluta push eder, diğer cihazlardan gelen değişiklikleri de çeker.
      */
     private fun onAppResumed(activity: Activity) {
         if (!SyncConfig.isConfigured(context)) return
 
-        Log.i(TAG, "Uygulama ön plana geldi — otomatik pull başlatılıyor")
+        Log.i(TAG, "Uygulama ön plana geldi — resume kontrolü başlatılıyor")
         scope.launch {
+            // PlayerActivity kapandıktan sonra SharedPreferences listener'ın tetiklenmesi
+            // ve dirtyTypes'a eklenmesi için kısa bir bekleme (race condition koruması)
+            delay(400)
+
             try {
                 syncMutex.withLock {
-                    val result = syncManager?.syncAll(dirtyTypes = emptySet())
+                    // Bekleyen debounced push'u iptal et ve birikmiş dirty tipleri al
+                    pushJob?.cancel()
+                    val pendingDirty = consumeDirtyTypes()
+
+                    val result = syncManager?.syncAll(dirtyTypes = pendingDirty)
                     if (result?.success == true && result.downloadedCount > 0) {
-                        Log.i(TAG, "Resume-pull: ${result.downloadedCount} veri indirildi")
+                        Log.i(TAG, "Resume sync: ${result.downloadedCount} veri indirildi")
                         withContext(Dispatchers.Main) {
                             notifyUIUpdate(result.updatedTypes)
                         }
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Resume-pull hatası: ${e.message}")
+                Log.w(TAG, "Resume sync hatası: ${e.message}")
             }
         }
     }
@@ -489,7 +499,7 @@ class SyncScheduler(private val context: Context) {
      * SharedPreferences key'ini hangi SyncDataType'a ait olduğunu belirler.
      * DataExtractor'daki SyncDataType.fromKey ile aynı mantığı kullanır.
      */
-    private fun classifyKey(key: String): SyncDataType {
-        return SyncDataType.fromKey(key)
+    private fun classifyKey(key: String, isRebuild: Boolean = false): SyncDataType {
+        return SyncDataType.fromKey(key, isRebuild)
     }
 }
