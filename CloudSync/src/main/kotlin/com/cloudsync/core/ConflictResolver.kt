@@ -54,6 +54,8 @@ class ConflictResolver {
                 !Regex("^[0-9]+/").containsMatchIn(key) &&
                 !key.startsWith("download_header_cache")) {
                 false
+            } else if (item.dataType == SyncDataType.REPOS.name && Regex("^[0-9]+/").containsMatchIn(key)) {
+                false
             } else {
                 true
             }
@@ -64,7 +66,7 @@ class ConflictResolver {
         val toDownload = mutableListOf<SyncDataItem>()  // Cloud -> Local
         var conflictCount = 0
 
-        // Remote verilerdeki eski v1 kalıntılarını ve hesapsız kopyaları temizle (Supabase'den kalıcı olarak sil)
+        // Remote verilerdeki eski v1 kalıntılarını, hesapsız kopyaları ve hesap önekli repo/plugin anahtarlarını temizle (Supabase'den kalıcı olarak sil)
         val validRemoteItems = mutableListOf<SyncDataItem>()
         for (item in remoteItems) {
             val key = item.dataKey
@@ -72,8 +74,9 @@ class ConflictResolver {
             val isUnprefixedProgress = item.dataType == SyncDataType.WATCH_PROGRESS.name &&
                     !Regex("^[0-9]+/").containsMatchIn(key) &&
                     !key.startsWith("download_header_cache")
+            val isPrefixedRepo = item.dataType == SyncDataType.REPOS.name && Regex("^[0-9]+/").containsMatchIn(key)
 
-            if (isLegacyV1Resume || isUnprefixedProgress) {
+            if (isLegacyV1Resume || isUnprefixedProgress || isPrefixedRepo) {
                 // Supabase'deki bu çöp/eski satırı silmek için tombstone ekle
                 if (item.dataValue != DataExtractor.TOMBSTONE_VALUE) {
                     toUpload.add(item.copy(dataValue = DataExtractor.TOMBSTONE_VALUE))
@@ -237,7 +240,42 @@ class ConflictResolver {
                     continue
                 }
 
-                // 3. BOOKMARKS, REPOS ve diğerleri:
+                // 3. REPOS (Eklentiler ve Depolar) Akıllı Birleştirme (Merge):
+                if (dataType == SyncDataType.REPOS) {
+                    val cleanKey = localItem.dataKey.replaceFirst(Regex("^[0-9]+/"), "")
+                    val isRepoList = cleanKey.equals("REPOSITORIES_KEY", ignoreCase = true) ||
+                            cleanKey.equals("plugins_repositories", ignoreCase = true) ||
+                            cleanKey.equals("repositories", ignoreCase = true)
+                    val isPluginList = cleanKey.equals("PLUGINS_KEY", ignoreCase = true)
+
+                    if (isRepoList) {
+                        val merged = PluginSyncHelper.mergeRepositoriesJson(localItem.dataValue, remoteItem.dataValue)
+                        if (merged != localItem.dataValue) {
+                            Log.i(TAG, "Bulut ve yerel depo listeleri birleştirildi -> İndiriliyor: $cleanKey")
+                            toDownload.add(remoteItem.copy(dataKey = cleanKey, dataValue = merged))
+                        }
+                        if (merged != remoteItem.dataValue || isLocallyDirty) {
+                            Log.i(TAG, "Bulut ve yerel depo listeleri birleştirildi -> Yükleniyor: $cleanKey")
+                            toUpload.add(localItem.copy(dataKey = cleanKey, dataValue = merged))
+                        }
+                        conflictCount++
+                        continue
+                    } else if (isPluginList) {
+                        val merged = PluginSyncHelper.mergePluginsJson(localItem.dataValue, remoteItem.dataValue)
+                        if (merged != localItem.dataValue) {
+                            Log.i(TAG, "Bulut ve yerel eklenti listeleri birleştirildi -> İndiriliyor: $cleanKey")
+                            toDownload.add(remoteItem.copy(dataKey = cleanKey, dataValue = merged))
+                        }
+                        if (merged != remoteItem.dataValue || isLocallyDirty) {
+                            Log.i(TAG, "Bulut ve yerel eklenti listeleri birleştirildi -> Yükleniyor: $cleanKey")
+                            toUpload.add(localItem.copy(dataKey = cleanKey, dataValue = merged))
+                        }
+                        conflictCount++
+                        continue
+                    }
+                }
+
+                // 4. BOOKMARKS ve diğerleri:
                 if (isLocallyDirty) {
                     toUpload.add(localItem)
                 } else if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
@@ -254,7 +292,12 @@ class ConflictResolver {
             if (!localMap.containsKey(compositeKey)) {
                 // Bulutta zaten silinmiş (tombstone) ve yerelde de yoksa indirmeye gerek yok
                 if (remoteItem.dataValue != DataExtractor.TOMBSTONE_VALUE && remoteItem.dataValue != null) {
-                    toDownload.add(remoteItem)
+                    val cleanItem = if (remoteItem.dataType == SyncDataType.REPOS.name) {
+                        remoteItem.copy(dataKey = remoteItem.dataKey.replaceFirst(Regex("^[0-9]+/"), ""))
+                    } else {
+                        remoteItem
+                    }
+                    toDownload.add(cleanItem)
                 }
             }
         }

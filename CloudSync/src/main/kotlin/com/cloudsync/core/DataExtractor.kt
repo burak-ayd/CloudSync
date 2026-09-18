@@ -283,7 +283,23 @@ class DataExtractor(private val context: Context) {
             val dataType = SyncDataType.fromKey(key, isRebuildPrefs)
             if (!dataTypes.contains(dataType)) continue
 
-            currentKeys.add(key)
+            // REPOS (Eklentiler ve Depolar) küreseldir, asla hesap önekli (0/...) olmamalıdır!
+            val effectiveKey = if (dataType == SyncDataType.REPOS) {
+                val cleanKey = key.replaceFirst(Regex("^[0-9]+/"), "")
+                if (key != cleanKey) {
+                    prefs.edit().remove(key).apply()
+                    Log.i(TAG, "Yereldeki çöp hesap önekli repo anahtarı temizlendi: $key")
+                }
+                cleanKey
+            } else {
+                key
+            }
+
+            if (items.any { it.dataType == dataType.name && it.dataKey == effectiveKey }) {
+                continue
+            }
+
+            currentKeys.add(effectiveKey)
             val serializedValue = serializeValue(value) ?: continue
 
             items.add(
@@ -291,7 +307,7 @@ class DataExtractor(private val context: Context) {
                     userId = userId,
                     deviceId = deviceId,
                     dataType = dataType.name,
-                    dataKey = key,
+                    dataKey = effectiveKey,
                     dataValue = serializedValue,
                     updatedAt = now
                 )
@@ -467,8 +483,73 @@ class DataExtractor(private val context: Context) {
                 continue
             }
 
-            // ==================== 3. ÖĞE BAZLI VERİLER (BOOKMARKS, PROGRESS, REPOS) ====================
-            val isRebuildItem = item.dataType != SyncDataType.SETTINGS.name ||
+            // ==================== 3. DEPOLAR VE EKLENTİLER (REPOS) ====================
+            val isRepoItem = item.dataType == SyncDataType.REPOS.name ||
+                    SyncDataType.fromKey(item.dataKey) == SyncDataType.REPOS
+
+            if (isRepoItem) {
+                val cleanKey = item.dataKey.replaceFirst(Regex("^[0-9]+/"), "")
+                if (isTombstone) {
+                    defaultEditor.remove(cleanKey)
+                    rebuildEditor.remove(cleanKey)
+                    rebuildEditor.remove("0/$cleanKey")
+                    rebuildEditor.remove("$currentAccount/$cleanKey")
+                    appliedCount++
+                    continue
+                }
+
+                val rawVal = value ?: continue
+                val isRepoList = cleanKey.equals("REPOSITORIES_KEY", ignoreCase = true) ||
+                        cleanKey.equals("plugins_repositories", ignoreCase = true) ||
+                        cleanKey.equals("repositories", ignoreCase = true)
+                val isPluginList = cleanKey.equals("PLUGINS_KEY", ignoreCase = true)
+
+                if (isRepoList) {
+                    val localRepo = defaultPrefs.getString("REPOSITORIES_KEY", null)
+                        ?: rebuildPrefs.getString("REPOSITORIES_KEY", null)
+                    val merged = PluginSyncHelper.mergeRepositoriesJson(localRepo, rawVal)
+
+                    defaultEditor.putString("REPOSITORIES_KEY", merged)
+                    defaultEditor.putString("plugins_repositories", merged)
+                    defaultEditor.putString("repositories", merged)
+
+                    rebuildEditor.putString("REPOSITORIES_KEY", merged)
+                    rebuildEditor.putString("plugins_repositories", merged)
+                    rebuildEditor.putString("repositories", merged)
+
+                    rebuildEditor.remove("0/REPOSITORIES_KEY")
+                    rebuildEditor.remove("$currentAccount/REPOSITORIES_KEY")
+                    rebuildEditor.remove("0/plugins_repositories")
+                    rebuildEditor.remove("0/repositories")
+                    Log.i(TAG, "Depolar uygulandı ve birleştirildi: $cleanKey")
+                } else if (isPluginList) {
+                    val localPlugin = defaultPrefs.getString("PLUGINS_KEY", null)
+                        ?: rebuildPrefs.getString("PLUGINS_KEY", null)
+                    val merged = PluginSyncHelper.mergePluginsJson(localPlugin, rawVal)
+
+                    defaultEditor.putString("PLUGINS_KEY", merged)
+                    rebuildEditor.putString("PLUGINS_KEY", merged)
+
+                    rebuildEditor.remove("0/PLUGINS_KEY")
+                    rebuildEditor.remove("$currentAccount/PLUGINS_KEY")
+
+                    // Eksik .cs3 dosyalarını arka planda indir ve CloudStream'e yükle
+                    PluginSyncHelper.downloadMissingPlugins(context, merged)
+                    Log.i(TAG, "Eklentiler uygulandı ve birleştirildi: $cleanKey")
+                } else {
+                    // auto_download_plugins_key2, user_custom_sites vb.
+                    deserializeAndApply(defaultEditor, cleanKey, rawVal)
+                    deserializeAndApply(rebuildEditor, cleanKey, rawVal)
+                    rebuildEditor.remove("0/$cleanKey")
+                    rebuildEditor.remove("$currentAccount/$cleanKey")
+                }
+                appliedCount++
+                continue
+            }
+
+            // ==================== 4. ÖĞE BAZLI DİĞER VERİLER (BOOKMARKS, PROGRESS) ====================
+            val isRebuildItem = item.dataType == SyncDataType.WATCH_PROGRESS.name ||
+                    item.dataType == SyncDataType.BOOKMARKS.name ||
                     item.dataKey.contains("/") ||
                     Regex("^[0-9]+/").containsMatchIn(item.dataKey)
 
@@ -542,11 +623,20 @@ class DataExtractor(private val context: Context) {
             appliedCount++
         }
 
-        // Eski legacy result_resume_watching anahtarlarını yerelden tamamen temizle ki CloudStream'in
-        // migrateResumeWatching() fonksiyonu tetiklenip episodeId'yi null yapmasın
+        // Eski legacy result_resume_watching ve hesap önekli çöp repo anahtarlarını yerelden tamamen temizle
         rebuildPrefs.all?.keys?.forEach { k ->
             if (k.contains("result_resume_watching") && !k.contains("result_resume_watching_2")) {
                 rebuildEditor.remove(k)
+            } else if (Regex("^[0-9]+/").containsMatchIn(k)) {
+                val cleanK = k.replaceFirst(Regex("^[0-9]+/"), "")
+                if (cleanK.equals("REPOSITORIES_KEY", ignoreCase = true) ||
+                    cleanK.equals("PLUGINS_KEY", ignoreCase = true) ||
+                    cleanK.equals("plugins_repositories", ignoreCase = true) ||
+                    cleanK.equals("repositories", ignoreCase = true) ||
+                    cleanK.equals("auto_download_plugins_key2", ignoreCase = true) ||
+                    cleanK.equals("user_custom_sites", ignoreCase = true)) {
+                    rebuildEditor.remove(k)
+                }
             }
         }
 
@@ -626,7 +716,10 @@ class DataExtractor(private val context: Context) {
             defaultPrefs.all?.keys?.forEach { key ->
                 if (!isNonTransferable(key) && !SyncConfig.isCloudSyncKey(key)) {
                     val type = SyncDataType.fromKey(key, isRebuildPrefs = false)
-                    if (otherTypes.contains(type)) keys.add(key)
+                    if (otherTypes.contains(type)) {
+                        val effectiveKey = if (type == SyncDataType.REPOS) key.replaceFirst(Regex("^[0-9]+/"), "") else key
+                        keys.add(effectiveKey)
+                    }
                 }
             }
             rebuildPrefs.all?.keys?.forEach { key ->
@@ -640,7 +733,10 @@ class DataExtractor(private val context: Context) {
                         }
                     }
                     val type = SyncDataType.fromKey(key, isRebuildPrefs = true)
-                    if (otherTypes.contains(type)) keys.add(key)
+                    if (otherTypes.contains(type)) {
+                        val effectiveKey = if (type == SyncDataType.REPOS) key.replaceFirst(Regex("^[0-9]+/"), "") else key
+                        keys.add(effectiveKey)
+                    }
                 }
             }
         }

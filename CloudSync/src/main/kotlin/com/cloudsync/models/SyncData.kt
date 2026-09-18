@@ -106,7 +106,9 @@ enum class SyncDataType(val displayName: String, val keyPatterns: List<String>) 
             "plugins_repositories",
             "repositories",
             "user_custom_sites",
-            "repos_key"
+            "repos_key",
+            "auto_download_plugins",
+            "auto_update_plugins"
         )
     ),
     SETTINGS(
