@@ -640,11 +640,11 @@ class DataExtractor(private val context: Context) {
             }
         }
 
-        defaultEditor.apply()
-        rebuildEditor.apply()
+        val defaultCommitted = defaultEditor.commit()
+        val rebuildCommitted = rebuildEditor.commit()
 
         scheduler?.endRestore()
-        Log.i(TAG, "$appliedCount veri uygulandı/silindi (Hedef aktif profil: $currentAccount)")
+        Log.i(TAG, "$appliedCount veri uygulandı/silindi (Hedef aktif profil: $currentAccount, commit: default=$defaultCommitted, rebuild=$rebuildCommitted)")
     }
 
     /**

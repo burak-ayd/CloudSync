@@ -141,45 +141,65 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
                 return@withContext Result.failure(Exception("Supabase yapılandırılmamış"))
             }
 
-            // PostgREST sorgusu oluştur
-            val queryParts = mutableListOf("user_id=eq.$userId")
+            val allItems = mutableListOf<SyncDataItem>()
+            val pageSize = 1000
+            var offset = 0
+            var hasMore = true
+
+            // PostgREST sorgusu taban parametreleri
+            val baseQueryParts = mutableListOf("user_id=eq.$userId")
 
             if (dataTypes.isNotEmpty()) {
                 val typesFilter = dataTypes.joinToString(",")
-                queryParts.add("data_type=in.($typesFilter)")
+                baseQueryParts.add("data_type=in.($typesFilter)")
             }
 
-            queryParts.add("select=*")
-            queryParts.add("order=updated_at.desc")
-            queryParts.add("limit=5000")
+            baseQueryParts.add("select=*")
+            // Sayfalama sırasında aynı timestamp'e sahip satırların deterministik gelmesi için id eklenir
+            baseQueryParts.add("order=updated_at.desc,id.asc")
 
-            val url = buildUrl(TABLE_SYNC_DATA, queryParts.joinToString("&"))
+            while (hasMore) {
+                val queryParts = baseQueryParts.toMutableList()
+                queryParts.add("limit=$pageSize")
+                queryParts.add("offset=$offset")
 
-            val request = Request.Builder()
-                .url(url)
-                .get()
-                .addSupabaseHeaders()
-                .build()
+                val url = buildUrl(TABLE_SYNC_DATA, queryParts.joinToString("&"))
 
-            val response = httpClient.newCall(request).execute()
+                val request = Request.Builder()
+                    .url(url)
+                    .get()
+                    .addSupabaseHeaders()
+                    .build()
 
-            if (!response.isSuccessful) {
-                val errorMsg = extractErrorMessage(response.code, response.body?.string())
-                Log.e(TAG, "Veri indirme hatası: $errorMsg")
-                return@withContext Result.failure(Exception(errorMsg))
+                val response = httpClient.newCall(request).execute()
+
+                if (!response.isSuccessful) {
+                    val errorMsg = extractErrorMessage(response.code, response.body?.string())
+                    Log.e(TAG, "Veri indirme hatası (offset=$offset): $errorMsg")
+                    return@withContext Result.failure(Exception(errorMsg))
+                }
+
+                val body = response.body?.string() ?: "[]"
+                val pageItems: List<SyncDataItem> = objectMapper.readValue(
+                    body,
+                    object : TypeReference<List<SyncDataItem>>() {}
+                )
+
+                allItems.addAll(pageItems)
+                Log.d(TAG, "Veri sayfası indirildi: offset=$offset, gelen=${pageItems.size}")
+
+                if (pageItems.size < pageSize) {
+                    hasMore = false
+                } else {
+                    offset += pageSize
+                }
             }
-
-            val body = response.body?.string() ?: "[]"
-            val items: List<SyncDataItem> = objectMapper.readValue(
-                body,
-                object : TypeReference<List<SyncDataItem>>() {}
-            )
 
             // Supabase sorgusu order=updated_at.desc olduğundan en yeni öğeler en baştadır.
             // distinctBy ile duplicate satırlar elenir ve her zaman en yeni öğe korunur.
-            val distinctItems = items.distinctBy { "${it.dataType}:${it.dataKey}" }
+            val distinctItems = allItems.distinctBy { "${it.dataType}:${it.dataKey}" }
 
-            Log.i(TAG, "${distinctItems.size} veri indirildi (ham: ${items.size})")
+            Log.i(TAG, "Tüm sayfalar tamamlandı: ${distinctItems.size} veri indirildi (toplam ham: ${allItems.size})")
             Result.success(distinctItems)
         } catch (e: Exception) {
             Log.e(TAG, "Veri indirme hatası", e)

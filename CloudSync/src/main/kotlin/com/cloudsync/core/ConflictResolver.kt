@@ -169,7 +169,6 @@ class ConflictResolver {
 
                         when {
                             // Gerçek Çakışma: Hem bulutta yeni veri var hem de bu cihazda yeni izleme yapılmış.
-                            // Bu durumda (veya eşitlikte) en ileri olan pozisyonu tercih edelim.
                             lastSyncTime != 0L && remoteTime > lastSyncTime && isLocallyDirty -> {
                                 if (localPos != null && remotePos != null && localPos > remotePos) {
                                     Log.i(TAG, "Çakışma: Yerel izleme konumu daha ileri ($localPos > $remotePos) -> Yükleniyor: ${localItem.dataKey}")
@@ -179,15 +178,15 @@ class ConflictResolver {
                                     toDownload.add(remoteItem)
                                 }
                             }
-                            // Bulut verisi daha yeniyse indir (geri sarmayı desteklemek için bulutu tercih et)
-                            lastSyncTime == 0L || remoteTime > lastSyncTime -> {
-                                Log.i(TAG, "Bulut izleme konumu daha yeni -> İndiriliyor: ${remoteItem.dataKey}")
-                                toDownload.add(remoteItem)
-                            }
-                            // Bulut eski, yerelde değişiklik var veya farklı
-                            else -> {
+                            // Bu cihazda aktif izleme yapılmışsa buluta yükle
+                            isLocallyDirty -> {
                                 Log.i(TAG, "Yerel izleme konumu buluta gönderiliyor -> Yükleniyor: ${localItem.dataKey}")
                                 toUpload.add(localItem)
+                            }
+                            // Yerelde değişiklik YOKSA: Buluttaki veri geçerlidir, indir
+                            else -> {
+                                Log.i(TAG, "Bulut izleme konumu yerel cihaza uygulanıyor -> İndiriliyor: ${remoteItem.dataKey}")
+                                toDownload.add(remoteItem)
                             }
                         }
                     } else if (localItem.dataKey.contains("result_resume_watching_2") || remoteItem.dataKey.contains("result_resume_watching_2")) {
@@ -198,41 +197,36 @@ class ConflictResolver {
                         val localTime = localResume?.updateTime ?: 0L
                         val remoteUpdateTime = remoteResume?.updateTime ?: 0L
 
+                        val downloadItem = if (remoteResume?.episodeId == null && localResume?.episodeId != null) {
+                            remoteItem.copy(dataValue = patchEpisodeId(remoteItem.dataValue ?: "", localResume.episodeId))
+                        } else {
+                            remoteItem
+                        }
+
                         when {
-                            localTime > remoteUpdateTime -> {
+                            // Her iki tarafta da geçerli updateTime varsa timestamp karşılaştır
+                            localTime > 0L && remoteUpdateTime > 0L && localTime > remoteUpdateTime -> {
                                 Log.i(TAG, "Yerel izleme kaydı daha yeni ($localTime > $remoteUpdateTime) -> Yükleniyor: ${localItem.dataKey}")
                                 toUpload.add(localItem)
                             }
-                            remoteUpdateTime > localTime -> {
+                            localTime > 0L && remoteUpdateTime > 0L && remoteUpdateTime > localTime -> {
                                 Log.i(TAG, "Bulut izleme kaydı daha yeni ($remoteUpdateTime > $localTime) -> İndiriliyor: ${remoteItem.dataKey}")
-                                val downloadItem = if (remoteResume?.episodeId == null && localResume?.episodeId != null) {
-                                    remoteItem.copy(dataValue = patchEpisodeId(remoteItem.dataValue ?: "", localResume.episodeId))
-                                } else {
-                                    remoteItem
-                                }
                                 toDownload.add(downloadItem)
                             }
+                            // Bu cihazda aktif değişiklik varsa yükle
                             isLocallyDirty -> {
                                 toUpload.add(localItem)
                             }
-                            lastSyncTime == 0L || remoteTime > lastSyncTime -> {
-                                val downloadItem = if (remoteResume?.episodeId == null && localResume?.episodeId != null) {
-                                    remoteItem.copy(dataValue = patchEpisodeId(remoteItem.dataValue ?: "", localResume.episodeId))
-                                } else {
-                                    remoteItem
-                                }
-                                toDownload.add(downloadItem)
-                            }
+                            // Yerel kirli değilse bulut verisi indirilir
                             else -> {
-                                toUpload.add(localItem)
+                                toDownload.add(downloadItem)
                             }
                         }
                     } else if (isLocallyDirty) {
                         toUpload.add(localItem)
-                    } else if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
-                        toDownload.add(remoteItem)
                     } else {
-                        toUpload.add(localItem)
+                        // Yerel kirli değilse bulut verisini indir
+                        toDownload.add(remoteItem)
                     }
                     conflictCount++
                     continue
@@ -275,11 +269,15 @@ class ConflictResolver {
 
                 // 4. BOOKMARKS ve diğerleri:
                 if (isLocallyDirty) {
-                    toUpload.add(localItem)
-                } else if (lastSyncTime == 0L || remoteTime > lastSyncTime) {
-                    toDownload.add(remoteItem)
+                    if (lastSyncTime != 0L && remoteTime > lastSyncTime) {
+                        // Hem yerel kirli hem bulutta daha yeni değişiklik var -> Bulutu tercih et
+                        toDownload.add(remoteItem)
+                    } else {
+                        toUpload.add(localItem)
+                    }
                 } else {
-                    toUpload.add(localItem)
+                    // Yerelde değişiklik yapılmamışsa buluttan gelen veriyi her zaman yerel cihaza uygula
+                    toDownload.add(remoteItem)
                 }
                 conflictCount++
             }
@@ -320,7 +318,11 @@ class ConflictResolver {
         if (timestamp.isNullOrBlank()) return 0L
         return try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                java.time.Instant.parse(timestamp).toEpochMilli()
+                try {
+                    java.time.Instant.parse(timestamp).toEpochMilli()
+                } catch (_: Throwable) {
+                    java.time.OffsetDateTime.parse(timestamp).toInstant().toEpochMilli()
+                }
             } else {
                 parseTimestampLegacy(timestamp)
             }
