@@ -28,6 +28,12 @@ class SyncManager(private val context: Context) {
     private var provider: SyncProvider = SupabaseProvider(context)
 
     /**
+     * SyncScheduler referansı. DataExtractor.applyData çağrılırken
+     * restore guard'ı aktifleştirmek için kullanılır.
+     */
+    var syncScheduler: SyncScheduler? = null
+
+    /**
      * Senkronizasyon durumu callback'leri
      */
     interface SyncCallback {
@@ -57,10 +63,13 @@ class SyncManager(private val context: Context) {
      * 1. Local verileri çıkar
      * 2. Remote verileri indir
      * 3. Çakışmaları çöz
-     * 4. Yeni local verileri yükle
-     * 5. Yeni remote verileri uygula
+     * 4. ÖNCE buluttaki verileri yerel cihaza uygula
+     * 5. SONRA yeni/değişen yerel verileri buluta yükle
      */
-    suspend fun syncAll(callback: SyncCallback? = null): SyncResult =
+    suspend fun syncAll(
+        callback: SyncCallback? = null,
+        dirtyTypes: Set<SyncDataType> = emptySet()
+    ): SyncResult =
         withContext(Dispatchers.IO) {
             callback?.onSyncStarted()
 
@@ -112,12 +121,21 @@ class SyncManager(private val context: Context) {
 
                 // 3. Çakışmaları çöz
                 val lastSyncTime = SyncConfig.getLastSyncTime(context)
-                val resolved = conflictResolver.resolve(localItems, remoteItems, lastSyncTime)
+                val resolved = conflictResolver.resolve(localItems, remoteItems, lastSyncTime, dirtyTypes)
 
-                // 4. Yeni verileri buluta yükle
+                // 4. ÖNCE buluttan gelen yeni verileri yerel cihaza uygula
+                var downloadedCount = 0
+                if (resolved.toDownload.isNotEmpty()) {
+                    callback?.onSyncProgress("${resolved.toDownload.size} veri yerel cihaza uygulanıyor...")
+
+                    dataExtractor.applyData(resolved.toDownload, syncScheduler)
+                    downloadedCount = resolved.toDownload.size
+                }
+
+                // 5. SONRA bu cihazdaki yeni/değişen verileri buluta yükle
                 var uploadedCount = 0
                 if (resolved.toUpload.isNotEmpty()) {
-                    callback?.onSyncProgress("${resolved.toUpload.size} veri yükleniyor...")
+                    callback?.onSyncProgress("${resolved.toUpload.size} veri buluta yükleniyor...")
 
                     val uploadResult = provider.uploadData(resolved.toUpload)
                     if (uploadResult.isSuccess) {
@@ -125,15 +143,6 @@ class SyncManager(private val context: Context) {
                     } else {
                         Log.w(TAG, "Yükleme kısmen başarısız: ${uploadResult.exceptionOrNull()?.message}")
                     }
-                }
-
-                // 5. Yeni verileri local'a uygula
-                var downloadedCount = 0
-                if (resolved.toDownload.isNotEmpty()) {
-                    callback?.onSyncProgress("${resolved.toDownload.size} veri uygulanıyor...")
-
-                    dataExtractor.applyData(resolved.toDownload)
-                    downloadedCount = resolved.toDownload.size
                 }
 
                 // 6. Bilinen anahtarları (knownKeys) güncelle
@@ -296,7 +305,7 @@ class SyncManager(private val context: Context) {
                 val items = downloadResult.getOrDefault(emptyList())
 
                 callback?.onSyncProgress("${items.size} veri uygulanıyor...")
-                dataExtractor.applyData(items)
+                dataExtractor.applyData(items, syncScheduler)
 
                 SyncConfig.setLastSyncTime(context, System.currentTimeMillis())
 

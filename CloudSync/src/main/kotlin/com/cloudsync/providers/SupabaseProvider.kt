@@ -151,6 +151,7 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
 
             queryParts.add("select=*")
             queryParts.add("order=updated_at.desc")
+            queryParts.add("limit=5000")
 
             val url = buildUrl(TABLE_SYNC_DATA, queryParts.joinToString("&"))
 
@@ -174,8 +175,12 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
                 object : TypeReference<List<SyncDataItem>>() {}
             )
 
-            Log.i(TAG, "${items.size} veri indirildi")
-            Result.success(items)
+            // Supabase sorgusu order=updated_at.desc olduğundan en yeni öğeler en baştadır.
+            // distinctBy ile duplicate satırlar elenir ve her zaman en yeni öğe korunur.
+            val distinctItems = items.distinctBy { "${it.dataType}:${it.dataKey}" }
+
+            Log.i(TAG, "${distinctItems.size} veri indirildi (ham: ${items.size})")
+            Result.success(distinctItems)
         } catch (e: Exception) {
             Log.e(TAG, "Veri indirme hatası", e)
             Result.failure(e)
@@ -203,8 +208,16 @@ class SupabaseProvider(private val context: Context) : SyncProvider {
                 val batchSize = 100
                 var totalUploaded = 0
 
+                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }
+                val nowIso = sdf.format(java.util.Date())
+
                 for (batch in items.chunked(batchSize)) {
-                    val jsonBody = objectMapper.writeValueAsString(batch)
+                    val batchWithTimestamp = batch.map { item ->
+                        if (item.updatedAt.isNullOrBlank()) item.copy(updatedAt = nowIso) else item
+                    }
+                    val jsonBody = objectMapper.writeValueAsString(batchWithTimestamp)
 
                     val request = Request.Builder()
                         .url(url)
